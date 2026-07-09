@@ -38,10 +38,12 @@ async def _run_query_by_result_id(tmp_path):
 def test_vision_query_by_result_id(tmp_path):
     result = asyncio.run(_run_query_by_result_id(tmp_path))
     assert result["ok"] is True
+    assert result["mode"] == "full"
     assert result["total"] == 1
     assert result["results"][0]["result_id"] == "res_q"
-    assert result["results"][0]["tags"] == ["tag1"]
     assert "text" in result["results"][0]
+    assert "path" in result["results"][0]
+    assert "tags" in result["results"][0]
 
 
 async def _run_query_list(tmp_path):
@@ -69,12 +71,13 @@ async def _run_query_list(tmp_path):
         db.close()
 
 
-def test_vision_query_list_returns_summary_only(tmp_path):
+def test_vision_query_list_returns_peek_only(tmp_path):
     result = asyncio.run(_run_query_list(tmp_path))
     assert result["ok"] is True
+    assert result["mode"] == "peek"
     assert result["total"] == 1
-    assert "summary" in result["results"][0]
-    assert "text" not in result["results"][0]
+    item = result["results"][0]
+    assert set(item.keys()) == {"result_id", "filename", "summary"}
 
 
 async def _run_query_empty(tmp_path):
