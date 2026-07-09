@@ -76,7 +76,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     },
                     "previous_result_id": {
                         "type": "string",
-                        "description": "可选。追问模式：传入之前读图结果的 result_id，VL 模型会基于之前的理解回答新问题。",
+                        "description": "可选。追问模式：传入之前读图结果的 result_id，VL 模型会基于之前的理解回答新问题。注意：仅对本次 paths 中与之前同一张图片（sha256 相同）生效；如果你传了多个不同的图片，只有那张相同的图会进入追问模式，其他图正常读取。",
                     },
                 },
                 "required": ["paths"],

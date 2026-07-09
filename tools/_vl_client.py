@@ -44,6 +44,8 @@ def read_image(path: str, prompt: str) -> str:
         mime = "image/webp"
     elif ext == ".gif":
         mime = "image/gif"
+    elif ext == ".bmp":
+        mime = "image/bmp"
 
     payload = {
         "model": model,

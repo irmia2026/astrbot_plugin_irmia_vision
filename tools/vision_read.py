@@ -187,9 +187,13 @@ def read(
         else:
             result_id_hint = f"新结果 result_id 范围: {first_result_id} ~ {last_result_id}"
 
-    next_args: dict = {"recent": min(len(image_paths), 10)}
-    if first_result_id:
-        next_args["result_id"] = first_result_id
+    next_args: dict = {}
+    if first_result_id and last_result_id and first_result_id == last_result_id:
+        next_args = {"result_id": first_result_id}
+    else:
+        next_args = {"recent": min(len(image_paths), 10)}
+        if first_result_id:
+            next_args["result_id"] = first_result_id
 
     reply = {
         "ok": True,
