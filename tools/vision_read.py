@@ -71,6 +71,22 @@ def _parse_result(raw: str) -> dict:
     }
 
 
+def _adaptive_concurrency(model_cfg: dict) -> int:
+    """自适应并发数：
+    - 用户显式配置了 concurrency 则优先使用；
+    - 否则根据 timeout 估算，避免所有请求同时排队超时；
+    - 最高不超过 200。
+    """
+    user_value = model_cfg.get("concurrency")
+    if isinstance(user_value, int) and user_value > 0:
+        return user_value
+
+    timeout = float(model_cfg.get("timeout", 120.0))
+    # 经验：每个并发请求至少留出 2.5 秒冗余
+    suggested = max(1, int(timeout / 2.5))
+    return min(suggested, 200)
+
+
 async def read(
     db: VisionStore,
     paths: list[str],
@@ -90,7 +106,7 @@ async def read(
     model_cfg = get_vl_model_config()
     model_id = model_cfg.get("model", "unknown")
     api_key = model_cfg.get("api_key", "")
-    concurrency = max(1, int(model_cfg.get("concurrency", 50)))
+    concurrency = _adaptive_concurrency(model_cfg)
     max_retries = max(0, int(model_cfg.get("max_retries", 2)))
 
     previous_result = None
