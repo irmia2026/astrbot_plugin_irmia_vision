@@ -5,13 +5,13 @@
 import os
 import tempfile
 
-from tools._cache import VisionCache
+from tools._store import create_store, SQLiteVisionStore
 
 
 def _make_db():
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    return VisionCache(db_path), db_path
+    return create_store(db_path), db_path
 
 
 def test_find_cached_and_insert():
@@ -108,3 +108,9 @@ def test_search_and_path_filename():
     finally:
         db.close()
         os.unlink(db_path)
+
+
+def test_create_store_returns_sqlite():
+    db = create_store(":memory:")
+    assert isinstance(db, SQLiteVisionStore)
+    db.close()

@@ -2,10 +2,11 @@
 测试 vision_read 路径收集与缓存命中
 """
 
+import asyncio
 import os
 import tempfile
 
-from tools._cache import VisionCache
+from tools._store import create_store
 from tools import config as tool_config
 from tools.vision_read import _collect_image_paths, _parse_result
 
@@ -39,15 +40,14 @@ def test_parse_result():
     assert parsed["tags"] == []
 
 
-def test_vision_read_hits_cache(tmp_path):
-    """模拟读图命中缓存，不实际调用 VL。"""
+async def _run_vision_read_hits_cache(tmp_path):
     fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
     os.close(fd)
 
     img = tmp_path / "cached.png"
     img.write_bytes(b"fake image")
 
-    db = VisionCache(db_path)
+    db = create_store(db_path)
     tool_config.set_config(
         {
             "vl_model": {
@@ -55,12 +55,12 @@ def test_vision_read_hits_cache(tmp_path):
                 "base_url": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "gpt-4o",
+                "concurrency": 1,
             }
         },
         str(tmp_path),
     )
 
-    # 预插缓存
     db.insert(
         sha256=db.sha256_of_file(str(img)),
         filename="cached.png",
@@ -77,22 +77,27 @@ def test_vision_read_hits_cache(tmp_path):
 
     from tools import vision_read
 
-    result = vision_read.read(db, paths=[str(img)])
+    result = await vision_read.read(db, paths=[str(img)])
+    db.close()
+    return result
+
+
+def test_vision_read_hits_cache(tmp_path):
+    result = asyncio.run(_run_vision_read_hits_cache(tmp_path))
     assert result["ok"] is True
     assert result["total"] == 1
     assert result["cached"] == 1
     assert result["read"] == 0
 
 
-def test_vision_read_missing_key_for_new_image(tmp_path):
-    """未配置 api_key 时读取新图应友好提示。"""
+async def _run_vision_read_missing_key(tmp_path):
     fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
     os.close(fd)
 
     img = tmp_path / "new.png"
     img.write_bytes(b"fake image")
 
-    db = VisionCache(db_path)
+    db = create_store(db_path)
     tool_config.set_config(
         {
             "vl_model": {
@@ -107,6 +112,12 @@ def test_vision_read_missing_key_for_new_image(tmp_path):
 
     from tools import vision_read
 
-    result = vision_read.read(db, paths=[str(img)])
+    result = await vision_read.read(db, paths=[str(img)])
+    db.close()
+    return result
+
+
+def test_vision_read_missing_key_for_new_image(tmp_path):
+    result = asyncio.run(_run_vision_read_missing_key(tmp_path))
     assert result["ok"] is False
     assert "api_key" in result["proposal"]

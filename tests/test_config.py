@@ -14,6 +14,7 @@ def test_config_set_and_get():
             "base_url": "https://api.openai.com/v1",
             "api_key": "sk-test",
             "model": "gpt-4o",
+            "concurrency": 8,
         }
     }
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -21,3 +22,4 @@ def test_config_set_and_get():
         assert tool_config.get_config() == cfg
         assert tool_config.get_plugin_dir() == tmpdir
         assert tool_config.get_vl_model_config()["api_key"] == "sk-test"
+        assert tool_config.get_vl_model_config().get("concurrency") == 8

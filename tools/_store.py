@@ -1,5 +1,6 @@
 """
-SQLite 缓存层
+数据库后端抽象
+提供统一接口，默认使用 SQLite，可选 PostgreSQL / MongoDB。
 """
 
 from __future__ import annotations
@@ -8,7 +9,60 @@ import hashlib
 import json
 import os
 import sqlite3
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+
+
+def _like_escape(text: str) -> str:
+    return text.replace("%", "\\%").replace("_", "\\_")
+
+
+class VisionStore(ABC):
+    """图片缓存存储抽象基类。"""
+
+    @abstractmethod
+    def find_cached(self, sha256: str, filename: str, model_id: str, question: str = "") -> dict | None:
+        """查询缓存，命中时返回结果并更新 hit_count。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def insert(self, *, sha256: str, filename: str, phash: str, model_id: str, question: str,
+               result_id: str, source_value: str, summary: str, text: str, tags: list[str],
+               result_json: dict) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def search(self, query: str, limit: int = 20, offset: int = 0) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_by_path(self, path: str, limit: int = 20, offset: int = 0) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_recent(self, limit: int = 20, offset: int = 0) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_by_result_id(self, result_id: str) -> dict | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_by_filename(self, filename: str, limit: int = 20, offset: int = 0) -> list[dict]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def close(self) -> None:
+        raise NotImplementedError
+
+    @staticmethod
+    def sha256_of_file(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS image_cache (
@@ -35,12 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_tags ON image_cache(tags);
 """
 
 
-def _like_escape(text: str) -> str:
-    """转义 LIKE 通配符 % 和 _，避免注入。"""
-    return text.replace("%", "\\%").replace("_", "\\_")
-
-
-class VisionCache:
+class SQLiteVisionStore(VisionStore):
     def __init__(self, db_path: str):
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
@@ -49,7 +98,6 @@ class VisionCache:
         self._conn.commit()
 
     def close(self) -> None:
-        """显式关闭数据库连接，便于测试清理。"""
         if self._conn:
             self._conn.close()
             self._conn = None
@@ -58,18 +106,6 @@ class VisionCache:
         if self._conn is None:
             self._conn = sqlite3.connect(self.db_path, timeout=30.0)
         return self._conn
-
-    @staticmethod
-    def sha256_of_file(path: str) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        return h.hexdigest()
-
-    @staticmethod
-    def filename_hash(filename: str) -> str:
-        return hashlib.sha256(filename.encode("utf-8")).hexdigest()
 
     def find_cached(self, sha256: str, filename: str, model_id: str, question: str = "") -> dict | None:
         db = self._ensure_conn()
@@ -210,3 +246,9 @@ class VisionCache:
         ).fetchall()
         db.row_factory = None
         return [dict(r) for r in rows]
+
+
+def create_store(db_path: str) -> VisionStore:
+    """根据配置创建存储后端。"""
+    # 未来可在此根据 URI 前缀选择 PostgreSQL / MongoDB
+    return SQLiteVisionStore(db_path)

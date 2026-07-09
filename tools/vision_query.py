@@ -6,12 +6,12 @@ from __future__ import annotations
 
 import json
 
-from ._cache import VisionCache
+from ._store import VisionStore
 from ._helpers import proposal_reply
 
 
-def query(
-    db: VisionCache,
+async def query(
+    db: VisionStore,
     query: str = "",
     result_id: str = "",
     filename: str = "",
@@ -46,13 +46,14 @@ def query(
             tags = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
         except Exception:
             tags = []
+        text = r.get("text", "")
         cleaned.append(
             {
                 "result_id": r.get("result_id", ""),
                 "filename": r.get("filename", ""),
                 "path": r.get("source_value", ""),
                 "summary": r.get("summary", ""),
-                "text": (r.get("text", "")[:2000] + "..." if len(r.get("text", "")) > 2000 else r.get("text", "")),
+                "text": (text[:2000] + "..." if len(text) > 2000 else text),
                 "tags": tags,
                 "read_at": r.get("read_at", ""),
                 "hit_count": r.get("hit_count", 0),

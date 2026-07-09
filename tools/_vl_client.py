@@ -6,27 +6,75 @@ VL 模型客户端
 from __future__ import annotations
 
 import base64
+import io
 import os
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from .config import get_vl_model_config
 
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+TARGET_LONG_EDGE = 2048
+TARGET_QUALITY = 85
 
 
-def encode_image_to_base64(path: str) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
+def _compress_image(path: str, target_long_edge: int = TARGET_LONG_EDGE, quality: int = TARGET_QUALITY) -> tuple[bytes, str]:
+    """压缩图片到指定长边，返回字节和 MIME 类型。"""
+    ext = Path(path).suffix.lower()
+    with Image.open(path) as img:
+        # 处理动画 gif 的第一帧
+        if getattr(img, "is_animated", False):
+            img.seek(0)
+
+        # 转换为 RGB 以统一处理
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+
+        w, h = img.size
+        if max(w, h) > target_long_edge:
+            ratio = target_long_edge / max(w, h)
+            new_size = (int(w * ratio), int(h * ratio))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        if ext in (".jpg", ".jpeg"):
+            fmt = "JPEG"
+            mime = "image/jpeg"
+        elif ext == ".webp":
+            fmt = "WEBP"
+            mime = "image/webp"
+        elif ext == ".gif":
+            fmt = "JPEG"  # gif 压缩为 jpeg
+            mime = "image/jpeg"
+        elif ext == ".bmp":
+            fmt = "JPEG"
+            mime = "image/jpeg"
+        else:
+            fmt = "PNG"
+            mime = "image/png"
+
+        buf = io.BytesIO()
+        if fmt in ("JPEG", "WEBP"):
+            img.save(buf, format=fmt, quality=quality)
+        else:
+            img.save(buf, format=fmt)
+        return buf.getvalue(), mime
 
 
-def read_image(path: str, prompt: str) -> str:
-    """调用用户配置的 VL 模型读取图片，返回文本结果。"""
+def encode_image(path: str) -> str:
+    """读取图片并压缩后编码为 base64。"""
+    raw, mime = _compress_image(path)
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('utf-8')}"
+
+
+async def read_image(path: str, prompt: str, *, max_tokens: int = 2048) -> str:
+    """异步调用用户配置的 VL 模型读取图片，返回文本结果。"""
     cfg = get_vl_model_config()
     base_url = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
     api_key = cfg.get("api_key", "")
     model = cfg.get("model", "gpt-4o")
+    timeout = cfg.get("timeout", 120.0)
 
     if not api_key:
         raise ValueError("未配置 vl_model.api_key")
@@ -35,17 +83,7 @@ def read_image(path: str, prompt: str) -> str:
     if size > MAX_IMAGE_SIZE:
         raise ValueError(f"图片超过 20MB 限制: {path}")
 
-    b64 = encode_image_to_base64(path)
-    ext = Path(path).suffix.lower()
-    mime = "image/png"
-    if ext in (".jpg", ".jpeg"):
-        mime = "image/jpeg"
-    elif ext == ".webp":
-        mime = "image/webp"
-    elif ext == ".gif":
-        mime = "image/gif"
-    elif ext == ".bmp":
-        mime = "image/bmp"
+    image_url = encode_image(path)
 
     payload = {
         "model": model,
@@ -57,14 +95,14 @@ def read_image(path: str, prompt: str) -> str:
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{mime};base64,{b64}",
+                            "url": image_url,
                             "detail": "auto",
                         },
                     },
                 ],
             }
         ],
-        "max_tokens": 2048,
+        "max_tokens": max_tokens,
     }
 
     headers = {
@@ -72,8 +110,8 @@ def read_image(path: str, prompt: str) -> str:
         "Content-Type": "application/json",
     }
 
-    with httpx.Client(timeout=120.0) as client:
-        resp = client.post(
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
             f"{base_url}/chat/completions",
             headers=headers,
             json=payload,
@@ -81,3 +119,9 @@ def read_image(path: str, prompt: str) -> str:
     resp.raise_for_status()
     data = resp.json()
     return data["choices"][0]["message"]["content"]
+
+
+def encode_image_to_base64(path: str) -> str:
+    """兼容旧接口：直接读取原始文件并 base64（不推荐）。"""
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")

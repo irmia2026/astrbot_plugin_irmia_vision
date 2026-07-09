@@ -9,9 +9,9 @@ from typing import Callable
 
 from astrbot.api import FunctionTool as _AstrBotFunctionTool
 
-from ._helpers import run_sync as _run_sync, unwrap as _unwrap
+from ._helpers import unwrap as _unwrap, proposal_reply
 from . import tool_stats as _tool_stats
-from ._cache import VisionCache
+from ._store import create_store, VisionStore
 from . import vision_read as _vision_read
 from . import vision_query as _vision_query
 
@@ -26,7 +26,7 @@ def make_tool(
     description: str,
     parameters: dict,
     fn: Callable[..., dict],
-    db: VisionCache,
+    db: VisionStore,
 ) -> type[FunctionTool]:
     """工厂函数：创建工具类。"""
 
@@ -42,7 +42,8 @@ def make_tool(
     async def call(self, context, **kwargs):
         _tool_stats.record(self.name)
         try:
-            return _unwrap(await _run_sync(fn, db=db, **kwargs))
+            result = await fn(db=db, **kwargs)
+            return _unwrap(result)
         except Exception as e:
             return _unwrap(proposal_reply(False, "工具执行失败", error=str(e)))
 
@@ -51,7 +52,7 @@ def make_tool(
 
 
 def register_tools(db_path: str) -> list[FunctionTool]:
-    db = VisionCache(db_path)
+    db = create_store(db_path)
 
     tool_classes = [
         make_tool(

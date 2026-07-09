@@ -4,6 +4,7 @@ vision_read — 批量读图并落库
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -12,8 +13,8 @@ from astrbot.api import logger
 from PIL import Image
 import imagehash
 
-from ._cache import VisionCache
 from ._helpers import proposal_reply
+from ._store import VisionStore
 from ._vl_client import MAX_IMAGE_SIZE, read_image as vl_read_image
 from .config import get_vl_model_config
 
@@ -70,8 +71,8 @@ def _parse_result(raw: str) -> dict:
     }
 
 
-def read(
-    db: VisionCache,
+async def read(
+    db: VisionStore,
     paths: list[str],
     question: str = "",
     force_reread: bool = False,
@@ -89,6 +90,8 @@ def read(
     model_cfg = get_vl_model_config()
     model_id = model_cfg.get("model", "unknown")
     api_key = model_cfg.get("api_key", "")
+    concurrency = max(1, int(model_cfg.get("concurrency", 4)))
+    max_retries = max(0, int(model_cfg.get("max_retries", 2)))
 
     previous_result = None
     if previous_result_id:
@@ -100,8 +103,11 @@ def read(
     failed_paths: list[str] = []
     first_result_id = ""
     last_result_id = ""
+    semaphore = asyncio.Semaphore(concurrency)
 
-    for path in image_paths:
+    async def _read_one(path: str) -> None:
+        nonlocal cached_count, read_count, failed_count, first_result_id, last_result_id
+
         try:
             filename = os.path.basename(path)
             sha256 = db.sha256_of_file(path)
@@ -121,19 +127,29 @@ def read(
                 cached = db.find_cached(sha256, filename, model_id, question)
             if cached:
                 cached_count += 1
-                continue
+                return
 
             if not api_key:
-                return proposal_reply(
-                    False,
-                    "未配置 VL 模型的 api_key，无法读取新图片。请在 AstrBot WebUI 或 config.json 中配置 vl_model.api_key。",
-                    options=["去配置 api_key", "使用 vision_query 查询已缓存结果"],
-                )
+                failed_count += 1
+                failed_paths.append(f"{path}: 未配置 vl_model.api_key")
+                return
 
             _check_image_size(path)
             phash = _compute_phash(path)
             final_prompt = prompt + previous_context if previous_context else prompt
-            raw = vl_read_image(path, final_prompt)
+
+            raw = ""
+            for attempt in range(max_retries + 1):
+                async with semaphore:
+                    try:
+                        raw = await vl_read_image(path, final_prompt)
+                        break
+                    except Exception as e:
+                        if attempt == max_retries:
+                            raise
+                        logger.warning(f"读图重试 {path}: {e}")
+                        await asyncio.sleep(1.0)
+
             parsed = _parse_result(raw)
             result_id = f"res_{uuid.uuid4().hex[:12]}"
 
@@ -165,6 +181,8 @@ def read(
             failed_count += 1
             if len(failed_paths) < 10:
                 failed_paths.append(f"{path}: {err_msg}")
+
+    await asyncio.gather(*[_read_one(p) for p in image_paths])
 
     if not api_key and read_count == 0 and cached_count == 0:
         return proposal_reply(

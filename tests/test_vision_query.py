@@ -2,17 +2,18 @@
 测试 vision_query 查询结果
 """
 
+import asyncio
 import os
 import tempfile
 
-from tools._cache import VisionCache
+from tools._store import create_store
 from tools import vision_query
 
 
-def test_vision_query_by_result_id():
-    fd, db_path = tempfile.mkstemp(suffix=".db")
+async def _run_query_by_result_id(tmp_path):
+    fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
     os.close(fd)
-    db = VisionCache(db_path)
+    db = create_store(db_path)
     try:
         db.insert(
             sha256="sha1",
@@ -28,33 +29,41 @@ def test_vision_query_by_result_id():
             result_json={},
         )
 
-        result = vision_query.query(db, result_id="res_q")
-        assert result["ok"] is True
-        assert result["total"] == 1
-        assert result["results"][0]["result_id"] == "res_q"
-        assert result["results"][0]["tags"] == ["tag1"]
+        result = await vision_query.query(db, result_id="res_q")
+        return result
     finally:
         db.close()
-        os.unlink(db_path)
 
 
-def test_vision_query_empty():
-    fd, db_path = tempfile.mkstemp(suffix=".db")
+def test_vision_query_by_result_id(tmp_path):
+    result = asyncio.run(_run_query_by_result_id(tmp_path))
+    assert result["ok"] is True
+    assert result["total"] == 1
+    assert result["results"][0]["result_id"] == "res_q"
+    assert result["results"][0]["tags"] == ["tag1"]
+
+
+async def _run_query_empty(tmp_path):
+    fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
     os.close(fd)
-    db = VisionCache(db_path)
+    db = create_store(db_path)
     try:
-        result = vision_query.query(db, query="不存在")
-        assert result["ok"] is False
-        assert "proposal" in result
+        result = await vision_query.query(db, query="不存在")
+        return result
     finally:
         db.close()
-        os.unlink(db_path)
 
 
-def test_vision_query_pagination():
-    fd, db_path = tempfile.mkstemp(suffix=".db")
+def test_vision_query_empty(tmp_path):
+    result = asyncio.run(_run_query_empty(tmp_path))
+    assert result["ok"] is False
+    assert "proposal" in result
+
+
+async def _run_query_pagination(tmp_path):
+    fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
     os.close(fd)
-    db = VisionCache(db_path)
+    db = create_store(db_path)
     try:
         for i in range(3):
             db.insert(
@@ -71,11 +80,15 @@ def test_vision_query_pagination():
                 result_json={},
             )
 
-        result = vision_query.query(db, recent=10, limit=2, offset=0)
-        assert result["ok"] is True
-        assert result["total"] == 2
-        assert result["next_call"]["arguments"]["offset"] == 2
-        assert result["next_call"]["tool"] == "vision_query"
+        result = await vision_query.query(db, recent=10, limit=2, offset=0)
+        return result
     finally:
         db.close()
-        os.unlink(db_path)
+
+
+def test_vision_query_pagination(tmp_path):
+    result = asyncio.run(_run_query_pagination(tmp_path))
+    assert result["ok"] is True
+    assert result["total"] == 2
+    assert result["next_call"]["arguments"]["offset"] == 2
+    assert result["next_call"]["tool"] == "vision_query"
