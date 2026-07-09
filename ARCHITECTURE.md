@@ -56,12 +56,27 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 | `tools/_registry.py` | 工厂函数 `make_tool`，注册两个工具实例 |
 | `tools/vision_read.py` | 扫描路径、缓存判断、调用 VL、落库、返回摘要 |
 | `tools/vision_query.py` | 按多种条件查询缓存结果，支持分页 |
-| `tools/_cache.py` | SQLite 封装：schema、CRUD、模糊搜索 |
+| `tools/_store.py` | 存储抽象层：定义 `VisionStore` 基类，默认 `SQLiteVisionStore` |
 | `tools/_vl_client.py` | OpenAI 兼容 VL 客户端 |
 | `tools/_helpers.py` | `unwrap`、`proposal_reply`、`run_sync` |
 | `tools/config.py` | 插件配置内存管理 |
 | `tools/tool_stats.py` | 工具调用统计 |
 | `skills/vision-read/SKILL.md` | LLM 工作流提示 |
+
+## 存储后端（计划）
+
+`tools/_store.py` 已定义 `VisionStore` 抽象基类，目前默认实现 `SQLiteVisionStore`。未来接入其他数据库的步骤：
+
+1. 在配置中新增 `db_uri` 字段，例如：
+   - `postgresql://user:pass@localhost/irmia_vision`
+   - `mongodb://localhost:27017/irmia_vision`
+   - `sqlite:///path/to/vision_cache.db`（默认）
+2. 在 `tools/_store.py` 中实现：
+   - `PostgresVisionStore`（依赖 `psycopg`）
+   - `MongoVisionStore`（依赖 `pymongo`）
+3. 在 `create_store()` 中根据 `db_uri` 协议前缀分发。
+
+切换后端后，工具调用方无需改动，因为 `vision_read` / `vision_query` 只依赖 `VisionStore` 接口。
 
 ## 关键约定
 
