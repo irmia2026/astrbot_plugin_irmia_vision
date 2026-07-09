@@ -9,8 +9,6 @@ import json
 import os
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS image_cache (
@@ -46,11 +44,20 @@ class VisionCache:
     def __init__(self, db_path: str):
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-        self._init_db()
+        self._conn = sqlite3.connect(db_path, timeout=30.0)
+        self._conn.executescript(SCHEMA)
+        self._conn.commit()
 
-    def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path, timeout=30.0) as db:
-            db.executescript(SCHEMA)
+    def close(self) -> None:
+        """显式关闭数据库连接，便于测试清理。"""
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def _ensure_conn(self):
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path, timeout=30.0)
+        return self._conn
 
     @staticmethod
     def sha256_of_file(path: str) -> str:
@@ -65,26 +72,31 @@ class VisionCache:
         return hashlib.sha256(filename.encode("utf-8")).hexdigest()
 
     def find_cached(self, sha256: str, filename: str, model_id: str, question: str = "") -> dict | None:
-        with sqlite3.connect(self.db_path, timeout=30.0) as db:
-            row = db.execute(
-                "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND filename = ? AND model_id = ? AND question = ?",
-                (sha256, filename, model_id, question),
+        db = self._ensure_conn()
+        row = db.execute(
+            "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND filename = ? AND model_id = ? AND question = ?",
+            (sha256, filename, model_id, question),
+        ).fetchone()
+        if row:
+            db.execute(
+                "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
+                (datetime.now(timezone.utc).isoformat(), row[0]),
+            )
+            db.commit()
+            hit_row = db.execute(
+                "SELECT hit_count FROM image_cache WHERE result_id = ?",
+                (row[0],),
             ).fetchone()
-            if row:
-                db.execute(
-                    "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
-                    (datetime.now(timezone.utc).isoformat(), row[0]),
-                )
-                db.commit()
-                return {
-                    "result_id": row[0],
-                    "result_json": row[1],
-                    "summary": row[2],
-                    "text": row[3],
-                    "tags": row[4],
-                    "read_at": row[5],
-                }
-            return None
+            return {
+                "result_id": row[0],
+                "result_json": row[1],
+                "summary": row[2],
+                "text": row[3],
+                "tags": row[4],
+                "read_at": row[5],
+                "hit_count": hit_row[0] if hit_row else 1,
+            }
+        return None
 
     def insert(
         self,
@@ -101,95 +113,100 @@ class VisionCache:
         tags: list[str],
         result_json: dict,
     ) -> None:
-        with sqlite3.connect(self.db_path) as db:
-            db.execute(
-                """
-                INSERT INTO image_cache (sha256, filename, phash, model_id, question, result_id, source_value, summary, text, tags, result_json, read_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    sha256,
-                    filename,
-                    phash,
-                    model_id,
-                    question,
-                    result_id,
-                    source_value,
-                    summary,
-                    text,
-                    json.dumps(tags, ensure_ascii=False),
-                    json.dumps(result_json, ensure_ascii=False),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-            db.commit()
+        db = self._ensure_conn()
+        db.execute(
+            """
+            INSERT INTO image_cache (sha256, filename, phash, model_id, question, result_id, source_value, summary, text, tags, result_json, read_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sha256,
+                filename,
+                phash,
+                model_id,
+                question,
+                result_id,
+                source_value,
+                summary,
+                text,
+                json.dumps(tags, ensure_ascii=False),
+                json.dumps(result_json, ensure_ascii=False),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        db.commit()
 
     def search(self, query: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path, timeout=30.0) as db:
-            db.row_factory = sqlite3.Row
-            like = f"%{_like_escape(query)}%"
-            rows = db.execute(
-                """
-                SELECT result_id, sha256, filename, source_value, summary, text, tags, read_at, hit_count
-                FROM image_cache
-                WHERE summary LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
-                  OR filename LIKE ? ESCAPE '\\' OR source_value LIKE ? ESCAPE '\\'
-                ORDER BY hit_count DESC, read_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (like, like, like, like, like, limit, offset),
-            ).fetchall()
-            return [dict(r) for r in rows]
+        db = self._ensure_conn()
+        db.row_factory = sqlite3.Row
+        like = f"%{_like_escape(query)}%"
+        rows = db.execute(
+            """
+            SELECT result_id, sha256, filename, source_value, summary, text, tags, read_at, hit_count
+            FROM image_cache
+            WHERE summary LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
+              OR filename LIKE ? ESCAPE '\\' OR source_value LIKE ? ESCAPE '\\'
+            ORDER BY hit_count DESC, read_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (like, like, like, like, like, limit, offset),
+        ).fetchall()
+        db.row_factory = None
+        return [dict(r) for r in rows]
 
     def get_by_path(self, path: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path, timeout=30.0) as db:
-            db.row_factory = sqlite3.Row
-            like = f"%{_like_escape(path)}%"
-            rows = db.execute(
-                """
-                SELECT * FROM image_cache
-                WHERE source_value LIKE ? ESCAPE '\\'
-                ORDER BY read_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (like, limit, offset),
-            ).fetchall()
-            return [dict(r) for r in rows]
+        db = self._ensure_conn()
+        db.row_factory = sqlite3.Row
+        like = f"%{_like_escape(path)}%"
+        rows = db.execute(
+            """
+            SELECT * FROM image_cache
+            WHERE source_value LIKE ? ESCAPE '\\'
+            ORDER BY read_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (like, limit, offset),
+        ).fetchall()
+        db.row_factory = None
+        return [dict(r) for r in rows]
 
     def get_recent(self, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path, timeout=30.0) as db:
-            db.row_factory = sqlite3.Row
-            rows = db.execute(
-                """
-                SELECT * FROM image_cache
-                ORDER BY read_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
-            ).fetchall()
-            return [dict(r) for r in rows]
+        db = self._ensure_conn()
+        db.row_factory = sqlite3.Row
+        rows = db.execute(
+            """
+            SELECT * FROM image_cache
+            ORDER BY read_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+        db.row_factory = None
+        return [dict(r) for r in rows]
 
     def get_by_result_id(self, result_id: str) -> dict | None:
-        with sqlite3.connect(self.db_path, timeout=30.0) as db:
-            db.row_factory = sqlite3.Row
-            row = db.execute(
-                "SELECT * FROM image_cache WHERE result_id = ?",
-                (result_id,),
-            ).fetchone()
-            if row:
-                db.execute(
-                    "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
-                    (datetime.now(timezone.utc).isoformat(), result_id),
-                )
-                db.commit()
-                return dict(row)
-            return None
+        db = self._ensure_conn()
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            "SELECT * FROM image_cache WHERE result_id = ?",
+            (result_id,),
+        ).fetchone()
+        db.row_factory = None
+        if row:
+            db.execute(
+                "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
+                (datetime.now(timezone.utc).isoformat(), result_id),
+            )
+            db.commit()
+            return dict(row)
+        return None
 
     def get_by_filename(self, filename: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path, timeout=30.0) as db:
-            db.row_factory = sqlite3.Row
-            rows = db.execute(
-                "SELECT * FROM image_cache WHERE filename = ? ORDER BY read_at DESC LIMIT ? OFFSET ?",
-                (filename, limit, offset),
-            ).fetchall()
-            return [dict(r) for r in rows]
+        db = self._ensure_conn()
+        db.row_factory = sqlite3.Row
+        rows = db.execute(
+            "SELECT * FROM image_cache WHERE filename = ? ORDER BY read_at DESC LIMIT ? OFFSET ?",
+            (filename, limit, offset),
+        ).fetchall()
+        db.row_factory = None
+        return [dict(r) for r in rows]
