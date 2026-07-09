@@ -68,7 +68,13 @@ class Main(star.Star):
 
         # WebUI 配置优先
         if config:
-            vl_model = config.get("vl_model")
+            sectioned = {}
+            for section_name in ("VL 模型配置",):
+                value = config.get(section_name, {})
+                if isinstance(value, dict):
+                    sectioned.update(value)
+            web_config = {**config, **sectioned}
+            vl_model = web_config.get("vl_model")
             if isinstance(vl_model, dict):
                 _config["vl_model"] = vl_model
 

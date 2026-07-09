@@ -1,0 +1,50 @@
+{
+  "VL 模型配置": {
+    "description": "配置视觉语言模型（VL）的连接参数，支持 OpenAI 兼容 API。修改后重载插件生效。",
+    "type": "object",
+    "items": {
+      "vl_model": {
+        "description": "VL 模型连接参数",
+        "type": "object",
+        "items": {
+          "provider": {
+            "description": "模型提供商（openai / azure / 自定义）",
+            "type": "string",
+            "default": "openai"
+          },
+          "base_url": {
+            "description": "API 地址，支持 OpenAI 兼容 API（如 https://api.openai.com/v1）",
+            "hint": "例如 https://api.openai.com/v1",
+            "type": "string",
+            "default": "https://api.openai.com/v1"
+          },
+          "api_key": {
+            "description": "API 密钥",
+            "type": "string",
+            "default": ""
+          },
+          "model": {
+            "description": "模型名称（如 gpt-4o、gpt-4o-mini、claude-3-5-sonnet）",
+            "type": "string",
+            "default": "gpt-4o"
+          },
+          "timeout": {
+            "description": "请求超时时间（秒）",
+            "type": "float",
+            "default": 120.0
+          },
+          "concurrency": {
+            "description": "最大并发请求数",
+            "type": "int",
+            "default": 50
+          },
+          "max_retries": {
+            "description": "最大重试次数",
+            "type": "int",
+            "default": 2
+          }
+        }
+      }
+    }
+  }
+}

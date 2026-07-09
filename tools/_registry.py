@@ -58,7 +58,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
     tool_classes = [
         make_tool(
             name="vision_read",
-            description="当你需要理解图片内容时调用：读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，并将结果存入本地数据库。支持单文件、多文件、文件夹路径。读图完成后不会返回每张图的详细内容，需要继续调用 vision_query 查询。",
+            description="当你需要理解图片内容时主动调用——包括但不限于：用户在对话中要求分析图片、你在 dir_list/es_search 等文件操作中发现了 .jpg/.png 等图片文件且猜测其内容可能对任务有帮助、浏览目录时遇到照片/截图/发票等任何需要视觉理解才能获取信息的场景。读取图片或文件夹中所有图片，调用 VL 模型理解内容并存入数据库。读图完成后不会返回详情，需继续调用 vision_query 获取结果。",
             parameters={
                 "type": "object",
                 "properties": {
