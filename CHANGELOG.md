@@ -26,6 +26,6 @@
 - 缓存策略：按 `(sha256, filename, model_id, question)` 缓存，换文件名/模型/问题会重新读图。
 - 追问模式：通过 `previous_result_id` 基于已有理解继续提问。
 - 强制重读：`force_reread` 忽略缓存。
-- 默认中文图片描述 prompt，客观、生动、逐字提取可见文字。
+- `vision_export`：批量导出已读图结果为 JSON/CSV，方便脚本批量处理。
 - 单张图片 20MB 大小限制。
 - `skills/vision-read/SKILL.md` 提供 LLM 工作流提示。

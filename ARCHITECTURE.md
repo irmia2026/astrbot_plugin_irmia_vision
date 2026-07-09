@@ -61,6 +61,7 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 | `tools/_helpers.py` | `unwrap`、`proposal_reply`、`run_sync` |
 | `tools/config.py` | 插件配置内存管理 |
 | `tools/tool_stats.py` | 工具调用统计 |
+| `tools/vision_export.py` | 批量导出已读图结果为 JSON/CSV，方便外部脚本处理 |
 | `skills/vision-read/SKILL.md` | LLM 工作流提示 |
 
 ## 存储后端（计划）

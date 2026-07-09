@@ -6,6 +6,7 @@
 
 - `vision_read`：读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，结果存入本地数据库。
 - `vision_query`：查询已读图的结果，支持关键词、文件名、路径、最近结果、分页。
+- `vision_export`：将大量结果导出为 JSON/CSV，方便交给 Python 脚本批量处理。
 - 异步并发 VL 调用，自适应并发数。
 - 大图片自动压缩后上传。
 - 同一张图读过会命中缓存，避免重复调用 VL 模型。
@@ -70,6 +71,12 @@ pip install -r requirements.txt
 1. LLM 调用 `vision_query({"recent": 5})` 找到目标图的 `result_id`。
 2. LLM 调用 `vision_read({"paths": ["/path/to/image.png"], "question": "发票金额是多少？", "previous_result_id": "res_xxx"})`。
 
+**批量处理场景**：
+
+1. `vision_read({"paths": ["/source/folder"]})` 批量读图。
+2. `vision_export({"path": "/source/folder", "fmt": "json", "limit": 10000})` 导出 JSON。
+3. 导出文件路径会返回给 LLM，可交给 Python 脚本进行批量分类、移动、统计等处理。
+
 ## 工具参数
 
 ### vision_read
@@ -92,6 +99,19 @@ pip install -r requirements.txt
 | `recent` | `integer` | 否 | 最近 N 条。 |
 | `limit` | `integer` | 否 | 最多返回条数，默认 20，最大 100。 |
 | `offset` | `integer` | 否 | 分页偏移，默认 0。 |
+
+### vision_export
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `query` | `string` | 否 | 自然语言搜索筛选。 |
+| `filename` | `string` | 否 | 按文件名筛选。 |
+| `path` | `string` | 否 | 按路径筛选。 |
+| `recent` | `integer` | 否 | 导出最近 N 条。 |
+| `limit` | `integer` | 否 | 最多导出条数，默认 1000，最大 10000。 |
+| `offset` | `integer` | 否 | 分页偏移。 |
+| `output_path` | `string` | 否 | 输出文件路径，默认插件目录下 `exports/vision_export_时间戳.json`。 |
+| `fmt` | `string` | 否 | 格式：`json` 或 `csv`，默认 `json`。 |
 
 ## 注意事项
 

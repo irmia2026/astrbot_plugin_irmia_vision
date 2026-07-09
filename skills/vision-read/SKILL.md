@@ -151,7 +151,22 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-### 4. 迭代深入
+### 5. 批量导出
+
+当你需要批量处理大量结果（例如交给 Python 脚本分类、移动、统计）时，调用 `vision_export`：
+
+```json
+{
+  "path": "C:/Users/me/Pictures",
+  "fmt": "json",
+  "limit": 10000
+}
+```
+
+工具会把结果写入本地文件，并返回文件路径。之后你可以：
+
+- 用 Python 读取该文件并批量处理。
+- 或继续用 `vision_query` 翻页查看。
 
 - 结果太多 → 加 `limit` 或更精确的 `query`
 - 想看某条完整结果 → 用 `result_id` 精确查询

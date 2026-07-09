@@ -52,7 +52,8 @@ class VisionStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def close(self) -> None:
+    def export_all(self, limit: int = 0, offset: int = 0) -> list[dict]:
+        """导出原始结果记录，limit=0 表示全部。"""
         raise NotImplementedError
 
     @staticmethod
@@ -244,6 +245,22 @@ class SQLiteVisionStore(VisionStore):
             "SELECT * FROM image_cache WHERE filename = ? ORDER BY read_at DESC LIMIT ? OFFSET ?",
             (filename, limit, offset),
         ).fetchall()
+        db.row_factory = None
+        return [dict(r) for r in rows]
+
+    def export_all(self, limit: int = 0, offset: int = 0) -> list[dict]:
+        db = self._ensure_conn()
+        db.row_factory = sqlite3.Row
+        if limit > 0:
+            rows = db.execute(
+                "SELECT * FROM image_cache ORDER BY read_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM image_cache ORDER BY read_at DESC LIMIT -1 OFFSET ?",
+                (offset,),
+            ).fetchall()
         db.row_factory = None
         return [dict(r) for r in rows]
 

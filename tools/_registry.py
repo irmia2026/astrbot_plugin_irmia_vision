@@ -14,6 +14,7 @@ from . import tool_stats as _tool_stats
 from ._store import create_store, VisionStore
 from . import vision_read as _vision_read
 from . import vision_query as _vision_query
+from . import vision_export as _vision_export
 
 
 @dataclass
@@ -125,6 +126,53 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                 "required": [],
             },
             fn=_vision_query.query,
+            db=db,
+        ),
+        make_tool(
+            name="vision_export",
+            description="当你需要批量处理大量已读图结果时调用：将数据库中符合筛选条件的结果导出为本地 JSON 或 CSV 文件。导出后可以把文件路径交给 Python 脚本进行批量处理，避免把大量结果塞进上下文。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "自然语言搜索条件，与 vision_query 一致。",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "按文件名筛选。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "按文件路径筛选。",
+                    },
+                    "recent": {
+                        "type": "integer",
+                        "description": "导出最近读取的 N 条结果。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "最多导出条数，默认 1000，最大 10000。",
+                        "default": 1000,
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "分页偏移量，默认 0。",
+                        "default": 0,
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "导出文件路径。默认保存到插件目录下的 exports/vision_export_时间戳.json。",
+                    },
+                    "fmt": {
+                        "type": "string",
+                        "description": "导出格式：json 或 csv。默认 json。",
+                        "default": "json",
+                    },
+                },
+                "required": [],
+            },
+            fn=_vision_export.export,
             db=db,
         ),
     ]
