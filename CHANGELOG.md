@@ -1,11 +1,19 @@
 # 更新日志
 
-## 1.0.1
+## 1.0.2
+
+### 新增
+
+- 异步并发 VL 读图：通过 `asyncio.Semaphore` 控制并发，支持 `concurrency` / `timeout` / `max_retries` 配置。
+- 大图片自动压缩：长边超过 2048 时按比例缩放，减少上传体积和 token 消耗。
+- 自适应并发：未配置 `concurrency` 时，根据 `timeout` 自动估算（最高 200）。
+- 存储后端抽象：新增 `tools/_store.py` 的 `VisionStore` 基类，默认 `SQLiteVisionStore`，预留 PostgreSQL / MongoDB 扩展路径。
+- 工具描述改为 LLM 视角，明确由 LLM 自主决定何时调用。
 
 ### 修复
 
-- 单图场景下 `vision_read` 的 `next_call` 直接返回 `result_id`，避免返回 `recent` 造成多余查询。
-- 明确 `previous_result_id` 仅作用于与之前同一张图片（sha256 相同），避免多图路径下误导。
+- 单图场景下 `vision_read` 的 `next_call` 直接返回 `result_id`。
+- 明确 `previous_result_id` 仅作用于与之前同一张图片（sha256 相同）。
 - 为 `.bmp` 图片补充 `image/bmp` MIME 类型。
 
 ## 1.0.0
