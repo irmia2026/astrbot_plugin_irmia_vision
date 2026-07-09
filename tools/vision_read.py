@@ -90,7 +90,7 @@ async def read(
     model_cfg = get_vl_model_config()
     model_id = model_cfg.get("model", "unknown")
     api_key = model_cfg.get("api_key", "")
-    concurrency = max(1, int(model_cfg.get("concurrency", 4)))
+    concurrency = max(1, int(model_cfg.get("concurrency", 50)))
     max_retries = max(0, int(model_cfg.get("max_retries", 2)))
 
     previous_result = None

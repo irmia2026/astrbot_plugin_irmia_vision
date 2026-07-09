@@ -18,6 +18,9 @@ _DEFAULT_CONFIG = {
         "base_url": "https://api.openai.com/v1",
         "api_key": "",
         "model": "gpt-4o",
+        "timeout": 120.0,
+        "concurrency": 50,
+        "max_retries": 2,
     },
     "example": "在 WebUI 配置中填写 vl_model.api_key 即可使用，支持 OpenAI 兼容 API。",
 }
