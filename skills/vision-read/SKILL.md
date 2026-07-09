@@ -92,7 +92,10 @@ vision_read 只负责把图读完存进数据库。
 
 ### 3. 查询结果
 
-根据任务需求调用 `vision_query`：
+`vision_query` 的查询结果分为两种：
+
+- **精确查询**：用 `result_id` 查询，返回该条结果的完整描述（`text` 字段）。
+- **列表查询**：用 `query`、`filename`、`path`、`recent` 查询，只返回摘要（`summary`），不返回完整描述 `text`。
 
 #### 自然语言搜索
 
@@ -135,6 +138,16 @@ vision_read 只负责把图读完存进数据库。
   "query": "发票",
   "limit": 20,
   "offset": 20
+}
+```
+
+#### 查看完整描述
+
+当你从列表中找到目标结果后，用 `result_id` 查询完整描述：
+
+```json
+{
+  "result_id": "res_xxx"
 }
 ```
 

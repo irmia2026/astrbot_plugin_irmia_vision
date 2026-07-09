@@ -87,29 +87,29 @@ def register_tools(db_path: str) -> list[FunctionTool]:
         ),
         make_tool(
             name="vision_query",
-            description="在 vision_read 之后，当你需要查看具体图片结果时调用：从本地数据库查询已读过的图片结果。支持自然语言搜索、精确 result_id、文件名、路径查询，以及最近结果和分页。查询结果包含图片路径、摘要、提取文字等，可用于分类、筛选、移动文件等后续操作。",
+            description="在 vision_read 之后，当你需要查看具体图片结果时调用：从本地数据库查询已读过的图片结果。除 result_id 精确查询外，其他查询只返回摘要；想看完整描述时，请用 result_id 精确查询。",
             parameters={
                 "type": "object",
                 "properties": {
                     "result_id": {
                         "type": "string",
-                        "description": "通过 result_id 精确查询单条结果。",
+                        "description": "通过 result_id 精确查询单条结果，会返回包含完整描述的 text 字段。",
                     },
                     "filename": {
                         "type": "string",
-                        "description": "通过文件名查询，例如'invoice.png'。",
+                        "description": "按文件名查询。只返回摘要，不返回完整描述。",
                     },
                     "path": {
                         "type": "string",
-                        "description": "通过文件路径查询，支持路径前缀或包含字符串。例如'C:/Users/me/Pictures'或'invoice'。",
+                        "description": "按文件路径查询，支持路径前缀或包含字符串。只返回摘要，不返回完整描述。",
                     },
                     "query": {
                         "type": "string",
-                        "description": "自然语言搜索关键词，会在摘要、文字、标签、文件名、路径中模糊搜索。例如'发票'、'错误弹窗'、'登录页面'。",
+                        "description": "自然语言搜索关键词，会在摘要、文字、标签、文件名、路径中模糊搜索。只返回摘要，不返回完整描述。",
                     },
                     "recent": {
                         "type": "integer",
-                        "description": "查询最近读取的 N 条结果。例如传 10 表示最近 10 条。",
+                        "description": "查询最近读取的 N 条结果。只返回摘要，不返回完整描述。",
                     },
                     "limit": {
                         "type": "integer",
