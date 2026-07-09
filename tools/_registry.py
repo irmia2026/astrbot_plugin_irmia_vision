@@ -1,0 +1,132 @@
+"""
+工具注册表
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable
+
+from astrbot.api import FunctionTool as _AstrBotFunctionTool
+
+from ._helpers import run_sync as _run_sync, unwrap as _unwrap
+from . import tool_stats as _tool_stats
+from ._cache import VisionCache
+from . import vision_read as _vision_read
+from . import vision_query as _vision_query
+
+
+@dataclass
+class FunctionTool(_AstrBotFunctionTool):
+    """AstrBot v4.16+ 兼容基类。"""
+
+
+def make_tool(
+    name: str,
+    description: str,
+    parameters: dict,
+    fn: Callable[..., dict],
+    db: VisionCache,
+) -> type[FunctionTool]:
+    """工厂函数：创建工具类。"""
+
+    _T_dict = {
+        "__annotations__": {"name": str, "description": str, "parameters": dict},
+        "name": name,
+        "description": description,
+        "parameters": field(default_factory=lambda: parameters),
+    }
+    _T = type(name.title().replace("_", "") + "Tool", (FunctionTool,), _T_dict)
+    _T = dataclass(_T)
+
+    async def call(self, context, **kwargs):
+        _tool_stats.record(self.name)
+        clean = {k: (v if v != "" else None) for k, v in kwargs.items()}
+        try:
+            return _unwrap(await _run_sync(fn, db=db, **clean))
+        except Exception as e:
+            return {"error": str(e)}
+
+    _T.call = call
+    return _T
+
+
+def register_tools(db_path: str) -> list[type[FunctionTool]]:
+    db = VisionCache(db_path)
+
+    tools = [
+        make_tool(
+            name="vision_read",
+            description="【主动读图工具】读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，并将结果存入本地数据库。支持单文件、多文件、文件夹路径。同一张图（按内容 hash + 文件名 + 模型 + 问题）已读过会命中缓存，不再重复调用 VL 模型。读图完成后不会返回每张图的详细内容，请使用 vision_query 查询具体结果。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "图片文件路径或文件夹路径列表，支持绝对路径或相对路径。例如 [\"C:/Users/me/Pictures/invoice.png\", \"C:/Users/me/Pictures\"]",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "可选，高级用法。默认情况下工具会自动使用专业的图片描述 prompt 读取图片，无需传此参数。如果你需要对图片提出特定问题（如'这张图属于什么类别'、'发票金额是多少'），可以传入。同一个 question 会命中缓存，不同 question 会重新读图。",
+                    },
+                    "force_reread": {
+                        "type": "boolean",
+                        "description": "可选。强制重新读图，忽略缓存。用于想换角度或追问细节时。",
+                        "default": False,
+                    },
+                    "previous_result_id": {
+                        "type": "string",
+                        "description": "可选。追问模式：传入之前读图结果的 result_id，VL 模型会基于之前的理解回答新问题。",
+                    },
+                },
+                "required": ["paths"],
+            },
+            fn=_vision_read.read,
+            db=db,
+        ),
+        make_tool(
+            name="vision_query",
+            description="【查询已读图结果】从本地数据库查询 vision_read 已读过的图片结果。支持自然语言搜索、精确 result_id、图片 sha256、文件名查询。查询结果包含图片路径、摘要、提取文字等，可用于分类、筛选、移动文件等后续操作。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "result_id": {
+                        "type": "string",
+                        "description": "通过 result_id 精确查询单条结果。",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "通过文件名查询，例如'invoice.png'。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "通过文件路径查询，支持路径前缀或包含字符串。例如'C:/Users/me/Pictures'或'invoice'。",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "自然语言搜索关键词，会在摘要、文字、标签、文件名、路径中模糊搜索。例如'发票'、'错误弹窗'、'登录页面'。",
+                    },
+                    "recent": {
+                        "type": "integer",
+                        "description": "查询最近读取的 N 条结果。例如传 10 表示最近 10 条。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "最多返回条数，默认 20，最大 100。",
+                        "default": 20,
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "分页偏移量，默认 0。",
+                        "default": 0,
+                    },
+                },
+                "required": [],
+            },
+            fn=_vision_query.query,
+            db=db,
+        ),
+    ]
+
+    return tools

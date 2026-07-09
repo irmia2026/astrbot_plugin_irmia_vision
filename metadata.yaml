@@ -1,0 +1,9 @@
+name: astrbot_plugin_irmia_vision
+display_name: 弥亚视觉工具
+desc: 为 Agent 提供读图能力，结果落库存储，避免重复读取
+author: 伊尔弥亚
+version: 1.0.0
+repo: ""
+short_desc: 读图、缓存、查询
+astrbot_version: ">=4.16"
+support_platforms: [aiocqhttp, qq_official, telegram]
