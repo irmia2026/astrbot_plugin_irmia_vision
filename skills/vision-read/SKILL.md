@@ -73,11 +73,19 @@ vision_read 只负责把图读完存进数据库。
 
 ```json
 {
-  "status": "completed",
+  "ok": true,
   "total": 1250,
   "cached": 980,
   "read": 270,
-  "message": "读图完成。共 1250 张图片，980 张命中缓存，270 张新读。结果已存入数据库，请使用 vision_query 查看。"
+  "failed_count": 0,
+  "first_result_id": "res_abc123",
+  "last_result_id": "res_xyz789",
+  "proposal": "读图完成。请用 vision_query 查看最近结果或按关键词搜索。",
+  "next_call": {
+    "tool": "vision_query",
+    "arguments": {"recent": 10}
+  },
+  "message": "读图完成。共 1250 张图片，980 张命中缓存，270 张新读。新结果 result_id 范围: res_abc123 ~ res_xyz789。结果已存入数据库，请使用 vision_query 查看。"
 }
 ```
 
@@ -102,11 +110,30 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 按分类关键词搜索
+#### 按路径查询
 
 ```json
 {
-  "query": "截图 错误弹窗"
+  "path": "C:/Users/me/Pictures",
+  "limit": 20
+}
+```
+
+#### 最近结果
+
+```json
+{
+  "recent": 10
+}
+```
+
+#### 分页
+
+```json
+{
+  "query": "发票",
+  "limit": 20,
+  "offset": 20
 }
 ```
 
@@ -129,7 +156,7 @@ vision_read 只负责把图读完存进数据库。
 
 - 不要等 `vision_read` 返回每张图的详细内容，它只返回摘要。
 - 不要重复读已经缓存的图，命中缓存时会直接跳过。
-- 查询时优先用自然语言关键词，比 `sha256` 更实用。
+- 查询时优先用自然语言关键词，或按 `path`/`filename` 查询。
 - 路径可以是相对路径或绝对路径，文件夹会自动递归识别常见图片格式。
 - 只处理图片：`png`、`jpg`、`jpeg`、`webp`、`gif`、`bmp`。
 
@@ -138,5 +165,5 @@ vision_read 只负责把图读完存进数据库。
 - ❌ 调用 `vision_read` 后期待返回所有图片的详细描述。
 - ❌ 不查缓存直接让 VL 模型重复读同一张图。
 - ❌ 把大量图片结果塞进上下文，而不是用 `vision_query` 分批查询。
-- ❌ 用 `vision_query` 的 `sha256` 字段搜索，除非明确知道 hash。
+- ❌ 用 `vision_query` 的 `sha256` 字段搜索（已移除）。
 - ❌ 把 `vision_read` 和 `vision_query` 合并成一次调用。

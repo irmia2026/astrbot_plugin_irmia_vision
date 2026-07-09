@@ -41,30 +41,29 @@ def make_tool(
 
     async def call(self, context, **kwargs):
         _tool_stats.record(self.name)
-        clean = {k: (v if v != "" else None) for k, v in kwargs.items()}
         try:
-            return _unwrap(await _run_sync(fn, db=db, **clean))
+            return _unwrap(await _run_sync(fn, db=db, **kwargs))
         except Exception as e:
-            return {"error": str(e)}
+            return _unwrap(proposal_reply(False, "工具执行失败", error=str(e)))
 
     _T.call = call
     return _T
 
 
-def register_tools(db_path: str) -> list[type[FunctionTool]]:
+def register_tools(db_path: str) -> list[FunctionTool]:
     db = VisionCache(db_path)
 
-    tools = [
+    tool_classes = [
         make_tool(
             name="vision_read",
-            description="【主动读图工具】读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，并将结果存入本地数据库。支持单文件、多文件、文件夹路径。同一张图（按内容 hash + 文件名 + 模型 + 问题）已读过会命中缓存，不再重复调用 VL 模型。读图完成后不会返回每张图的详细内容，请使用 vision_query 查询具体结果。",
+            description="【当用户需要理解图片内容时调用】读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，并将结果存入本地数据库。支持单文件、多文件、文件夹路径。读图完成后不会返回每张图的详细内容，需要继续调用 vision_query 查询。",
             parameters={
                 "type": "object",
                 "properties": {
                     "paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "图片文件路径或文件夹路径列表，支持绝对路径或相对路径。例如 [\"C:/Users/me/Pictures/invoice.png\", \"C:/Users/me/Pictures\"]",
+                        "description": "图片文件路径或文件夹路径列表，支持绝对路径、相对路径、~ 用户主目录。例如 [\"C:/Users/me/Pictures/invoice.png\", \"~/Pictures\"]",
                     },
                     "question": {
                         "type": "string",
@@ -87,7 +86,7 @@ def register_tools(db_path: str) -> list[type[FunctionTool]]:
         ),
         make_tool(
             name="vision_query",
-            description="【查询已读图结果】从本地数据库查询 vision_read 已读过的图片结果。支持自然语言搜索、精确 result_id、图片 sha256、文件名查询。查询结果包含图片路径、摘要、提取文字等，可用于分类、筛选、移动文件等后续操作。",
+            description="【在 vision_read 之后查看具体图片结果时调用】从本地数据库查询已读过的图片结果。支持自然语言搜索、精确 result_id、文件名、路径查询，以及最近结果和分页。查询结果包含图片路径、摘要、提取文字等，可用于分类、筛选、移动文件等后续操作。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -129,4 +128,4 @@ def register_tools(db_path: str) -> list[type[FunctionTool]]:
         ),
     ]
 
-    return tools
+    return [tool_cls() for tool_cls in tool_classes]

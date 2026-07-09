@@ -19,6 +19,7 @@ _DEFAULT_CONFIG = {
         "api_key": "",
         "model": "gpt-4o",
     },
+    "example": "在 WebUI 配置中填写 vl_model.api_key 即可使用，支持 OpenAI 兼容 API。",
 }
 
 

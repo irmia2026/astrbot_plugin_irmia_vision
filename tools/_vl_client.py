@@ -6,11 +6,14 @@ VL 模型客户端
 from __future__ import annotations
 
 import base64
+import os
 from pathlib import Path
 
 import httpx
 
 from .config import get_vl_model_config
+
+MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
 
 
 def encode_image_to_base64(path: str) -> str:
@@ -27,6 +30,10 @@ def read_image(path: str, prompt: str) -> str:
 
     if not api_key:
         raise ValueError("未配置 vl_model.api_key")
+
+    size = os.path.getsize(path)
+    if size > MAX_IMAGE_SIZE:
+        raise ValueError(f"图片超过 20MB 限制: {path}")
 
     b64 = encode_image_to_base64(path)
     ext = Path(path).suffix.lower()
@@ -63,12 +70,12 @@ def read_image(path: str, prompt: str) -> str:
         "Content-Type": "application/json",
     }
 
-    resp = httpx.post(
-        f"{base_url}/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=120.0,
-    )
+    with httpx.Client(timeout=120.0) as client:
+        resp = client.post(
+            f"{base_url}/chat/completions",
+            headers=headers,
+            json=payload,
+        )
     resp.raise_for_status()
     data = resp.json()
     return data["choices"][0]["message"]["content"]

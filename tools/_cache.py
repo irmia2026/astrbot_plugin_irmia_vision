@@ -37,6 +37,11 @@ CREATE INDEX IF NOT EXISTS idx_tags ON image_cache(tags);
 """
 
 
+def _like_escape(text: str) -> str:
+    """转义 LIKE 通配符 % 和 _，避免注入。"""
+    return text.replace("%", "\\%").replace("_", "\\_")
+
+
 class VisionCache:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -44,7 +49,7 @@ class VisionCache:
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=30.0) as db:
             db.executescript(SCHEMA)
 
     @staticmethod
@@ -60,7 +65,7 @@ class VisionCache:
         return hashlib.sha256(filename.encode("utf-8")).hexdigest()
 
     def find_cached(self, sha256: str, filename: str, model_id: str, question: str = "") -> dict | None:
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=30.0) as db:
             row = db.execute(
                 "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND filename = ? AND model_id = ? AND question = ?",
                 (sha256, filename, model_id, question),
@@ -120,14 +125,15 @@ class VisionCache:
             db.commit()
 
     def search(self, query: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=30.0) as db:
             db.row_factory = sqlite3.Row
-            like = f"%{query}%"
+            like = f"%{_like_escape(query)}%"
             rows = db.execute(
                 """
                 SELECT result_id, sha256, filename, source_value, summary, text, tags, read_at, hit_count
                 FROM image_cache
-                WHERE summary LIKE ? OR text LIKE ? OR tags LIKE ? OR filename LIKE ? OR source_value LIKE ?
+                WHERE summary LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
+                  OR filename LIKE ? ESCAPE '\\' OR source_value LIKE ? ESCAPE '\\'
                 ORDER BY hit_count DESC, read_at DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -136,13 +142,13 @@ class VisionCache:
             return [dict(r) for r in rows]
 
     def get_by_path(self, path: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=30.0) as db:
             db.row_factory = sqlite3.Row
-            like = f"%{path}%"
+            like = f"%{_like_escape(path)}%"
             rows = db.execute(
                 """
                 SELECT * FROM image_cache
-                WHERE source_value LIKE ?
+                WHERE source_value LIKE ? ESCAPE '\\'
                 ORDER BY read_at DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -151,7 +157,7 @@ class VisionCache:
             return [dict(r) for r in rows]
 
     def get_recent(self, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=30.0) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 """
@@ -164,7 +170,7 @@ class VisionCache:
             return [dict(r) for r in rows]
 
     def get_by_result_id(self, result_id: str) -> dict | None:
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=30.0) as db:
             db.row_factory = sqlite3.Row
             row = db.execute(
                 "SELECT * FROM image_cache WHERE result_id = ?",
@@ -180,7 +186,7 @@ class VisionCache:
             return None
 
     def get_by_filename(self, filename: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        with sqlite3.connect(self.db_path) as db:
+        with sqlite3.connect(self.db_path, timeout=30.0) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
                 "SELECT * FROM image_cache WHERE filename = ? ORDER BY read_at DESC LIMIT ? OFFSET ?",
