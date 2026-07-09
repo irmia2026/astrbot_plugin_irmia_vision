@@ -7,3 +7,6 @@ venv/
 .env
 *.db
 .DS_Store
+.reasonix/
+data/
+irmia_eyes.zip
