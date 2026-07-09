@@ -74,20 +74,21 @@ vision_read 只负责把图读完存进数据库。
 ```json
 {
   "ok": true,
+  "status": "success",
   "total": 1250,
   "cached": 980,
   "read": 270,
-  "failed_count": 0,
-  "first_result_id": "res_abc123",
-  "last_result_id": "res_xyz789",
-  "proposal": "读图完成。请用 vision_query 查看最近结果或按关键词搜索。",
+  "failed": 0,
+  "result_id_hint": "新结果 result_id 范围: res_abc123 ~ res_xyz789",
+  "proposal": "读图完成。请用 vision_query 查看具体结果。",
   "next_call": {
     "tool": "vision_query",
-    "arguments": {"recent": 10}
-  },
-  "message": "读图完成。共 1250 张图片，980 张命中缓存，270 张新读。新结果 result_id 范围: res_abc123 ~ res_xyz789。结果已存入数据库，请使用 vision_query 查看。"
+    "arguments": {"result_id": "res_abc123", "recent": 10}
+  }
 }
 ```
+
+如果读图失败，会返回 `status: "partial"` 或 `failed"`，并附带 `failed_paths` 说明哪些文件出错。
 
 ### 3. 查询结果
 
