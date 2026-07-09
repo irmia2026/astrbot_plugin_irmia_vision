@@ -57,7 +57,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
     tool_classes = [
         make_tool(
             name="vision_read",
-            description="【当用户需要理解图片内容时调用】读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，并将结果存入本地数据库。支持单文件、多文件、文件夹路径。读图完成后不会返回每张图的详细内容，需要继续调用 vision_query 查询。",
+            description="当你需要理解图片内容时调用：读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，并将结果存入本地数据库。支持单文件、多文件、文件夹路径。读图完成后不会返回每张图的详细内容，需要继续调用 vision_query 查询。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -87,7 +87,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
         ),
         make_tool(
             name="vision_query",
-            description="【在 vision_read 之后查看具体图片结果时调用】从本地数据库查询已读过的图片结果。支持自然语言搜索、精确 result_id、文件名、路径查询，以及最近结果和分页。查询结果包含图片路径、摘要、提取文字等，可用于分类、筛选、移动文件等后续操作。",
+            description="在 vision_read 之后，当你需要查看具体图片结果时调用：从本地数据库查询已读过的图片结果。支持自然语言搜索、精确 result_id、文件名、路径查询，以及最近结果和分页。查询结果包含图片路径、摘要、提取文字等，可用于分类、筛选、移动文件等后续操作。",
             parameters={
                 "type": "object",
                 "properties": {
