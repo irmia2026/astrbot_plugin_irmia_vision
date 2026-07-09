@@ -92,12 +92,12 @@ vision_read 只负责把图读完存进数据库。
 
 ### 3. 查询结果
 
-`vision_query` 的查询结果分为两种：
+`vision_query` 有两种返回模式：
 
-- **精确查询**：用 `result_id` 查询，返回该条结果的完整描述（`text` 字段）。
-- **列表查询**：用 `query`、`filename`、`path`、`recent` 查询，只返回摘要（`summary`），不返回完整描述 `text`。
+- **peek 模式**：列表查询（`query`、`filename`、`path`、`recent`），只返回 `result_id`、`filename`、`summary` 三项。适合翻页、筛选、分类。
+- **full 模式**：`result_id` 精确查询，返回完整信息，包括 `path`、`text`、`tags`、`read_at`、`hit_count`。
 
-#### 自然语言搜索
+#### 自然语言搜索（peek）
 
 ```json
 {
@@ -106,7 +106,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 按文件名查询
+#### 按文件名查询（peek）
 
 ```json
 {
@@ -114,7 +114,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 按路径查询
+#### 按路径查询（peek）
 
 ```json
 {
@@ -123,7 +123,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 最近结果
+#### 最近结果（peek）
 
 ```json
 {
@@ -131,7 +131,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 分页
+#### 分页（peek）
 
 ```json
 {
@@ -141,9 +141,9 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 查看完整描述
+#### 查看完整描述（full）
 
-当你从列表中找到目标结果后，用 `result_id` 查询完整描述：
+当你从 peek 列表中找到目标结果后，用 `result_id` 查询完整信息：
 
 ```json
 {

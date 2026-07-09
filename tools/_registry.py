@@ -87,29 +87,29 @@ def register_tools(db_path: str) -> list[FunctionTool]:
         ),
         make_tool(
             name="vision_query",
-            description="在 vision_read 之后，当你需要查看具体图片结果时调用：从本地数据库查询已读过的图片结果。除 result_id 精确查询外，其他查询只返回摘要；想看完整描述时，请用 result_id 精确查询。",
+            description="在 vision_read 之后，当你需要查看具体图片结果时调用：从本地数据库查询已读过的图片结果。除 result_id 精确查询外，其他查询只返回 result_id、filename、summary 的轻量摘要；想看完整描述和路径时，请用 result_id 精确查询。",
             parameters={
                 "type": "object",
                 "properties": {
                     "result_id": {
                         "type": "string",
-                        "description": "通过 result_id 精确查询单条结果，会返回包含完整描述的 text 字段。",
+                        "description": "通过 result_id 精确查询单条结果，返回 full 模式：包含 path、完整描述 text、tags 等。",
                     },
                     "filename": {
                         "type": "string",
-                        "description": "按文件名查询。只返回摘要，不返回完整描述。",
+                        "description": "按文件名查询。返回 peek 模式：只包含 result_id、filename、summary。",
                     },
                     "path": {
                         "type": "string",
-                        "description": "按文件路径查询，支持路径前缀或包含字符串。只返回摘要，不返回完整描述。",
+                        "description": "按文件路径查询，支持路径前缀或包含字符串。返回 peek 模式：只包含 result_id、filename、summary。",
                     },
                     "query": {
                         "type": "string",
-                        "description": "自然语言搜索关键词，会在摘要、文字、标签、文件名、路径中模糊搜索。只返回摘要，不返回完整描述。",
+                        "description": "自然语言搜索关键词，会在摘要、文字、标签、文件名、路径中模糊搜索。返回 peek 模式：只包含 result_id、filename、summary。",
                     },
                     "recent": {
                         "type": "integer",
-                        "description": "查询最近读取的 N 条结果。只返回摘要，不返回完整描述。",
+                        "description": "查询最近读取的 N 条结果。返回 peek 模式：只包含 result_id、filename、summary。",
                     },
                     "limit": {
                         "type": "integer",
