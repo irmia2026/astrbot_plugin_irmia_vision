@@ -68,7 +68,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     },
                     "question": {
                         "type": "string",
-                        "description": "可选，高级用法。默认情况下工具会自动使用专业的图片描述 prompt 读取图片，无需传此参数。如果你需要对图片追问特定问题（如'这张图属于什么类别'、'发票金额是多少'），可以传入。同一个 question 会命中缓存，不同 question 会重新读图。",
+                        "description": "可选，高级用法。默认情况下工具会自动使用专业的图片描述 prompt 读取图片，无需传此参数。如果你需要对图片追问特定问题，可以传入。同一个 question 会命中缓存，不同 question 会重新读图。",
                     },
                     "force_reread": {
                         "type": "boolean",
