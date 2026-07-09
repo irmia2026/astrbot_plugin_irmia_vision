@@ -41,6 +41,40 @@ def test_vision_query_by_result_id(tmp_path):
     assert result["total"] == 1
     assert result["results"][0]["result_id"] == "res_q"
     assert result["results"][0]["tags"] == ["tag1"]
+    assert "text" in result["results"][0]
+
+
+async def _run_query_list(tmp_path):
+    fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
+    os.close(fd)
+    db = create_store(db_path)
+    try:
+        db.insert(
+            sha256="sha1",
+            filename="invoice.png",
+            phash="",
+            model_id="gpt-4o",
+            question="",
+            result_id="res_invoice",
+            source_value="/tmp/invoice.png",
+            summary="invoice summary",
+            text="invoice text content",
+            tags=["invoice"],
+            result_json={},
+        )
+
+        result = await vision_query.query(db, filename="invoice.png")
+        return result
+    finally:
+        db.close()
+
+
+def test_vision_query_list_returns_summary_only(tmp_path):
+    result = asyncio.run(_run_query_list(tmp_path))
+    assert result["ok"] is True
+    assert result["total"] == 1
+    assert "summary" in result["results"][0]
+    assert "text" not in result["results"][0]
 
 
 async def _run_query_empty(tmp_path):

@@ -10,6 +10,30 @@ from ._store import VisionStore
 from ._helpers import proposal_reply
 
 
+def _clean_result(row: dict, include_text: bool = False) -> dict:
+    tags_raw = row.get("tags", "[]")
+    try:
+        tags = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+    except Exception:
+        tags = []
+
+    item = {
+        "result_id": row.get("result_id", ""),
+        "filename": row.get("filename", ""),
+        "path": row.get("source_value", ""),
+        "summary": row.get("summary", ""),
+        "tags": tags,
+        "read_at": row.get("read_at", ""),
+        "hit_count": row.get("hit_count", 0),
+    }
+
+    if include_text:
+        text = row.get("text", "")
+        item["text"] = (text[:2000] + "..." if len(text) > 2000 else text)
+
+    return item
+
+
 async def query(
     db: VisionStore,
     query: str = "",
@@ -26,39 +50,24 @@ async def query(
     if result_id:
         row = db.get_by_result_id(result_id)
         results = [row] if row else []
+        include_text = True
     elif filename:
         results = db.get_by_filename(filename, limit=max_limit, offset=max_offset)
+        include_text = False
     elif path:
         results = db.get_by_path(path, limit=max_limit, offset=max_offset)
+        include_text = False
     elif query:
         results = db.search(query, limit=max_limit, offset=max_offset)
+        include_text = False
     elif recent > 0:
         results = db.get_recent(limit=min(max(0, recent), max_limit), offset=max_offset)
+        include_text = False
     else:
         results = []
+        include_text = False
 
-    cleaned = []
-    for r in results:
-        if not r:
-            continue
-        tags_raw = r.get("tags", "[]")
-        try:
-            tags = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
-        except Exception:
-            tags = []
-        text = r.get("text", "")
-        cleaned.append(
-            {
-                "result_id": r.get("result_id", ""),
-                "filename": r.get("filename", ""),
-                "path": r.get("source_value", ""),
-                "summary": r.get("summary", ""),
-                "text": (text[:2000] + "..." if len(text) > 2000 else text),
-                "tags": tags,
-                "read_at": r.get("read_at", ""),
-                "hit_count": r.get("hit_count", 0),
-            }
-        )
+    cleaned = [_clean_result(r, include_text=include_text) for r in results if r]
 
     if not cleaned:
         return proposal_reply(
@@ -78,11 +87,17 @@ async def query(
     elif recent > 0:
         next_args["recent"] = recent
 
+    proposal_text = "查询完成，共 {} 条结果。".format(len(cleaned))
+    if not include_text:
+        proposal_text += " 列表中只包含摘要；如需查看某条完整描述，请用 result_id 精确查询。"
+    else:
+        proposal_text += " 这是单条完整结果。"
+
     return {
         "ok": True,
         "total": len(cleaned),
         "results": cleaned,
-        "proposal": f"查询完成，共 {len(cleaned)} 条结果。如需继续查看，可调整 limit/offset 分页。",
+        "proposal": proposal_text,
         "next_call": {
             "tool": "vision_query",
             "arguments": next_args,
