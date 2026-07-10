@@ -6,10 +6,11 @@
 
 ## 工具
 
-只有两个工具，差分明显：
+三个工具，差分明显：
 
 - `vision_read`：读图并落库，只返回摘要，不返回每张图的详细内容。
-- `vision_query`：查询已落库的结果，支持自然语言、文件名、路径、result_id、最近结果、分页。
+- `vision_query`：查询已落库的结果。列表查询返回轻量摘要（peek 模式），`result_id` 精确查询返回完整信息（full 模式）。
+- `vision_export`：把符合条件的结果导出为 JSON/CSV 文件，方便外部脚本批量处理。
 
 ## 数据流
 
@@ -34,7 +35,10 @@ LLM 调用 vision_read(paths=[...])
 LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
   │
   ▼
-从 SQLite 读取并返回结构化的结果列表
+返回 peek/full 模式的结果列表
+  │
+  ▼
+如需批量处理大量结果，调用 vision_export 导出 JSON/CSV 文件
 ```
 
 ## 缓存设计
@@ -53,15 +57,15 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 | 文件 | 职责 |
 |---|---|
 | `main.py` | 插件入口：加载配置、初始化数据库、注册工具 |
-| `tools/_registry.py` | 工厂函数 `make_tool`，注册两个工具实例 |
+| `tools/_registry.py` | 工厂函数 `make_tool`，注册三个工具实例 |
 | `tools/vision_read.py` | 扫描路径、缓存判断、调用 VL、落库、返回摘要 |
-| `tools/vision_query.py` | 按多种条件查询缓存结果，支持分页 |
+| `tools/vision_query.py` | 按多种条件查询缓存结果，支持 peek/full 模式 |
+| `tools/vision_export.py` | 批量导出已读图结果为 JSON/CSV，方便外部脚本处理 |
 | `tools/_store.py` | 存储抽象层：定义 `VisionStore` 基类，默认 `SQLiteVisionStore` |
 | `tools/_vl_client.py` | OpenAI 兼容 VL 客户端 |
 | `tools/_helpers.py` | `unwrap`、`proposal_reply`、`run_sync` |
 | `tools/config.py` | 插件配置内存管理 |
 | `tools/tool_stats.py` | 工具调用统计 |
-| `tools/vision_export.py` | 批量导出已读图结果为 JSON/CSV，方便外部脚本处理 |
 | `skills/vision-read/SKILL.md` | LLM 工作流提示 |
 
 ## 存储后端（计划）

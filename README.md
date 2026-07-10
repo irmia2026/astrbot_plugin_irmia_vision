@@ -92,11 +92,11 @@ pip install -r requirements.txt
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `query` | `string` | 否 | 自然语言搜索。 |
-| `result_id` | `string` | 否 | 精确查询单条结果。 |
-| `filename` | `string` | 否 | 按文件名查询。 |
-| `path` | `string` | 否 | 按路径前缀/包含字符串查询。 |
-| `recent` | `integer` | 否 | 最近 N 条。 |
+| `query` | `string` | 否 | 自然语言搜索（peek 模式：返回 result_id/filename/summary）。 |
+| `result_id` | `string` | 否 | 精确查询单条结果（full 模式：包含 path/text/tags）。 |
+| `filename` | `string` | 否 | 按文件名查询（peek 模式）。 |
+| `path` | `string` | 否 | 按路径前缀/包含字符串查询（peek 模式）。 |
+| `recent` | `integer` | 否 | 最近 N 条（peek 模式）。 |
 | `limit` | `integer` | 否 | 最多返回条数，默认 20，最大 100。 |
 | `offset` | `integer` | 否 | 分页偏移，默认 0。 |
 
@@ -110,7 +110,7 @@ pip install -r requirements.txt
 | `recent` | `integer` | 否 | 导出最近 N 条。 |
 | `limit` | `integer` | 否 | 最多导出条数，默认 1000，最大 10000。 |
 | `offset` | `integer` | 否 | 分页偏移。 |
-| `output_path` | `string` | 否 | 输出文件路径，默认插件目录下 `exports/vision_export_时间戳.json`。 |
+| `output_path` | `string` | 否 | 输出文件路径，默认当前工作目录下 `vision_export_时间戳.json`。 |
 | `fmt` | `string` | 否 | 格式：`json` 或 `csv`，默认 `json`。 |
 
 ## 注意事项

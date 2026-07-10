@@ -4,11 +4,13 @@
 
 ### 新增
 
+- `vision_export`：批量导出已读图结果为 JSON/CSV，方便脚本批量处理。
 - 异步并发 VL 读图：通过 `asyncio.Semaphore` 控制并发，支持 `concurrency` / `timeout` / `max_retries` 配置。
 - 大图片自动压缩：长边超过 2048 时按比例缩放，减少上传体积和 token 消耗。
 - 自适应并发：未配置 `concurrency` 时，根据 `timeout` 自动估算（最高 200）。
 - 存储后端抽象：新增 `tools/_store.py` 的 `VisionStore` 基类，默认 `SQLiteVisionStore`，预留 PostgreSQL / MongoDB 扩展路径。
 - 工具描述改为 LLM 视角，明确由 LLM 自主决定何时调用。
+- `vision_query` 增加 peek / full 双模式：列表查询只返回 `result_id`/`filename`/`summary`，`result_id` 精确查询才返回完整 `path`/`text`/`tags`。
 
 ### 修复
 
@@ -26,6 +28,6 @@
 - 缓存策略：按 `(sha256, filename, model_id, question)` 缓存，换文件名/模型/问题会重新读图。
 - 追问模式：通过 `previous_result_id` 基于已有理解继续提问。
 - 强制重读：`force_reread` 忽略缓存。
-- `vision_export`：批量导出已读图结果为 JSON/CSV，方便脚本批量处理。
+- 默认中文图片描述 prompt，客观、生动、逐字提取可见文字。
 - 单张图片 20MB 大小限制。
 - `skills/vision-read/SKILL.md` 提供 LLM 工作流提示。

@@ -3,7 +3,7 @@ name: vision-read
 description: >
   主动读图工作流。触发：当你在任何场景下需要获取图片中的视觉信息——包括用户明确要求看图片、以及你在文件操作（dir_list、es_search、目录遍历等）中自行发现了 .jpg/.png/.webp/.bmp 等图片文件并认为其内容可能与当前任务相关。
   核心原则：先批量读图落库，再按需查询结果，避免把大量图片描述塞进上下文。
-  可用工具：vision_read、vision_query。
+  可用工具：vision_read、vision_query、vision_export。
 ---
 
 # 视觉读图工作流
@@ -15,6 +15,7 @@ vision_read 只负责把图读完存进数据库。
 具体结果不直接返回，必须再用 vision_query 查询。
 同一张图读过就不再读，命中缓存时直接跳过 VL 调用。
 批量读图时不要一次性看完所有结果，先看聚合摘要和样例，再按需深入。
+如需批量处理大量结果，用 vision_export 导出 JSON/CSV 文件。
 ```
 
 ## 什么时候触发
@@ -164,7 +165,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-### 5. 批量导出
+### 4. 批量导出
 
 当你需要批量处理大量结果（例如交给 Python 脚本分类、移动、统计）时，调用 `vision_export`：
 
@@ -181,6 +182,8 @@ vision_read 只负责把图读完存进数据库。
 - 用 Python 读取该文件并批量处理。
 - 或继续用 `vision_query` 翻页查看。
 
+### 5. 迭代深入
+
 - 结果太多 → 加 `limit` 或更精确的 `query`
 - 想看某条完整结果 → 用 `result_id` 精确查询
 - 分类不准 → 调整 `question` 重新调用 `vision_read`（同内容会命中缓存，只重读新规则）
@@ -190,9 +193,9 @@ vision_read 只负责把图读完存进数据库。
 当用户想根据图片内容移动文件时：
 
 1. `vision_read(paths=["/source/folder"], question="判断图片类别：invoice、screenshot、photo、other，并提取关键文字")`
-2. `vision_query(query="invoice")` 获取发票列表
-3. `vision_query(query="screenshot")` 获取截图列表
-4. 输出分类 → 文件路径的映射，由外部系统或用户执行移动
+2. `vision_query(query="invoice")` 用 peek 模式获取发票列表（只含 result_id/filename/summary）。
+3. 如果数量少，用 `vision_query(result_id="res_xxx")` 逐个确认 full 信息；如果数量多，用 `vision_export(query="invoice")` 导出完整信息（含 path）。
+4. 输出分类 → 文件路径的映射，由外部系统或用户执行移动。
 
 ## 注意事项
 
@@ -206,6 +209,6 @@ vision_read 只负责把图读完存进数据库。
 
 - ❌ 调用 `vision_read` 后期待返回所有图片的详细描述。
 - ❌ 不查缓存直接让 VL 模型重复读同一张图。
-- ❌ 把大量图片结果塞进上下文，而不是用 `vision_query` 分批查询。
+- ❌ 把大量图片结果塞进上下文，而不是用 `vision_query` 分批查询或 `vision_export` 导出。
 - ❌ 用 `vision_query` 的 `sha256` 字段搜索（已移除）。
 - ❌ 把 `vision_read` 和 `vision_query` 合并成一次调用。
