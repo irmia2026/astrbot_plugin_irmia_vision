@@ -68,8 +68,11 @@ def encode_image(path: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(raw).decode('utf-8')}"
 
 
-async def read_image(path: str, prompt: str, *, max_tokens: int = 2048) -> str:
-    """异步调用用户配置的 VL 模型读取图片，返回文本结果。"""
+async def read_image(path: str, prompt: str, *, max_tokens: int = 2048, client = None) -> str:
+    """异步调用用户配置的 VL 模型读取图片，返回文本结果。
+
+    支持传入外部 httpx.AsyncClient 以共享连接池，减少并发时的建连开销。
+    """
     cfg = get_vl_model_config()
     base_url = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
     api_key = cfg.get("api_key", "")
@@ -110,12 +113,19 @@ async def read_image(path: str, prompt: str, *, max_tokens: int = 2048) -> str:
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    if client is not None:
         resp = await client.post(
             f"{base_url}/chat/completions",
             headers=headers,
             json=payload,
         )
+    else:
+        async with httpx.AsyncClient(timeout=timeout) as client_inner:
+            resp = await client_inner.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
     resp.raise_for_status()
     data = resp.json()
     return data["choices"][0]["message"]["content"]
