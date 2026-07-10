@@ -1,4 +1,5 @@
 astrbot-api>=4.16
 httpx>=0.27
 pillow>=10.0
-imagehash>=4.3
+# 可选依赖（安装后可启用感知哈希去重）:
+# imagehash>=4.3

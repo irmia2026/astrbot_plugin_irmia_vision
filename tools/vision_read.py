@@ -11,7 +11,6 @@ from pathlib import Path
 
 from astrbot.api import logger
 from PIL import Image
-import imagehash
 
 from ._helpers import proposal_reply
 from ._store import VisionStore
@@ -54,9 +53,14 @@ def _collect_image_paths(paths: list[str]) -> list[str]:
 
 
 def _compute_phash(path: str) -> str:
+    """计算感知哈希。若 imagehash 未安装则跳过，不阻塞读图流程。"""
     try:
+        import imagehash
+
         with Image.open(path) as img:
             return str(imagehash.phash(img))
+    except ImportError:
+        return ""
     except Exception as e:
         logger.warning(f"计算 phash 失败 {path}: {e}")
         return ""
