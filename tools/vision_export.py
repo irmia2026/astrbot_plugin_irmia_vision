@@ -109,6 +109,7 @@ async def export(
     return {
         "ok": True,
         "total": len(records),
+        "exported": len(records),
         "format": fmt,
         "output_path": target_path,
         "proposal": f"已导出 {len(records)} 条结果到 {target_path}。你可以直接读取该文件，或写脚本批量处理。",
