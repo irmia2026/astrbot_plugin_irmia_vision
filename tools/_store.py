@@ -108,7 +108,7 @@ class SQLiteVisionStore(VisionStore):
 
     def _ensure_conn(self):
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path, timeout=30.0)
+            self._conn = sqlite3.connect(self.db_path, timeout=60.0)
         return self._conn
 
     def find_cached(self, sha256: str, filename: str, model_id: str, question: str = "") -> dict | None:
@@ -238,7 +238,9 @@ class SQLiteVisionStore(VisionStore):
                 (datetime.now(timezone.utc).isoformat(), result_id),
             )
             db.commit()
-            return dict(row)
+            d = dict(row)
+            d["hit_count"] = d.get("hit_count", 0) + 1
+            return d
         return None
 
     def get_by_filename(self, filename: str, limit: int = 20, offset: int = 0) -> list[dict]:

@@ -84,7 +84,7 @@ def _adaptive_concurrency(model_cfg: dict) -> int:
     timeout = float(model_cfg.get("timeout", 120.0))
     # 经验：每个并发请求至少留出 2.5 秒冗余
     suggested = max(1, int(timeout / 2.5))
-    return min(suggested, 200)
+    return min(suggested, 50)
 
 
 async def read(
@@ -206,15 +206,10 @@ async def read(
                 if len(failed_paths) < 10:
                     failed_paths.append(f"{path}: {err_msg}")
 
-    await asyncio.gather(*[_read_one(p) for p in image_paths])
-    await _httpx_client.aclose()
-
-    if not api_key and read_count == 0 and cached_count == 0:
-        return proposal_reply(
-            False,
-            "未配置 VL 模型的 api_key，无法读取新图片。请在 AstrBot WebUI 或 config.json 中配置 vl_model.api_key。",
-            options=["去配置 api_key", "使用 vision_query 查询已缓存结果"],
-        )
+    try:
+        await asyncio.gather(*[_read_one(p) for p in image_paths])
+    finally:
+        await _httpx_client.aclose()
 
     if failed_count > 0 and read_count == 0 and cached_count == 0:
         status = "failed"
