@@ -97,3 +97,36 @@ def test_resolve_provider_chain_empty_providers_fallback():
         chain = tool_config.resolve_provider_chain()
         assert len(chain) == 1
         assert chain[0]["model"] == "fallback-model"
+
+
+def test_resolve_provider_chain_auto_all_when_empty_ids():
+    """vl_provider_ids 为空时自动使用所有已保存的模型。"""
+    providers = [
+        {"id": "prov-a", "type": "openai_chat_completion", "api_base": "https://a.example.com/v1", "key": ["sk-a"], "model": "model-a"},
+        {"id": "prov-b", "type": "openai_chat_completion", "api_base": "https://b.example.com/v1", "key": ["sk-b"], "model": "model-b"},
+    ]
+    cfg = {
+        "vl_provider_ids": "",
+        "vl_model": {"api_key": "sk-fallback", "model": "fallback"},
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config(cfg, tmpdir)
+        tool_config.set_providers(providers)
+        chain = tool_config.resolve_provider_chain()
+        assert len(chain) == 2
+        assert chain[0]["model"] == "model-a"
+        assert chain[1]["model"] == "model-b"
+
+
+def test_provider_key_as_string():
+    """provider 的 key 字段为字符串时也能正确提取。"""
+    providers = [
+        {"id": "prov-str", "type": "openai_chat_completion", "api_base": "https://s.example.com/v1", "key": "sk-single-string", "model": "model-str"},
+    ]
+    cfg = {"vl_provider_ids": "prov-str", "vl_model": {}}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config(cfg, tmpdir)
+        tool_config.set_providers(providers)
+        chain = tool_config.resolve_provider_chain()
+        assert len(chain) == 1
+        assert chain[0]["api_key"] == "sk-single-string"

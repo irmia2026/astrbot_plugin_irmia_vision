@@ -4,8 +4,8 @@
     "type": "object",
     "items": {
       "vl_provider_ids": {
-        "description": "AstrBot 已保存的模型提供商 ID（逗号分隔，按降级顺序排列）。留空则使用下方 vl_model 手动配置。",
-        "hint": "例如：my-gpt4o,my-claude,my-qwen-vl。在 AstrBot WebUI「模型管理」中可查看各模型的 ID。",
+        "description": "AstrBot 已保存的模型提供商 ID（逗号分隔，按降级顺序排列）。留空则自动使用 AstrBot 中所有已保存的模型。",
+        "hint": "留空 = 自动使用全部已保存模型。如需指定顺序，填写模型 ID，例如：my-gpt4o,my-claude。在 AstrBot WebUI「模型管理」中可查看各模型的 ID。",
         "type": "string",
         "default": ""
       },

@@ -59,9 +59,10 @@ def _provider_to_vl_config(provider: dict) -> dict:
 
 def resolve_provider_chain() -> list[dict]:
     """解析降级链：
-    1. 如果配置了 vl_provider_ids（逗号分隔的 provider id 列表），按顺序解析；
-    2. 否则回退到 vl_model 单条配置；
-    3. 返回 VL 配置格式的列表，第一个是主选，后续是降级。
+    1. 如果配置了 vl_provider_ids（逗号分隔的 provider id 列表），按指定顺序解析；
+    2. 如果 vl_provider_ids 为空但 AstrBot 有已保存的模型，自动使用全部已保存模型（按保存顺序）；
+    3. 以上都没有时，回退到 vl_model 手动配置；
+    4. 返回 VL 配置格式的列表，第一个是主选，后续是降级。
     """
     vl_provider_ids_raw = _CONFIG.get("vl_provider_ids", "")
     if isinstance(vl_provider_ids_raw, str):
@@ -81,7 +82,13 @@ def resolve_provider_chain() -> list[dict]:
         if chain:
             return chain
 
-    # 回退到 vl_model 单条配置
+    # vl_provider_ids 为空时，自动使用所有已保存的模型
+    if not ids and _PROVIDERS:
+        chain = [_provider_to_vl_config(p) for p in _PROVIDERS]
+        if chain:
+            return chain
+
+    # 回退到 vl_model 手动配置
     vl_model = _CONFIG.get("vl_model", {})
     if vl_model:
         return [vl_model]
