@@ -13,16 +13,17 @@ from .tools import config as _tool_config
 from .tools._registry import register_tools
 
 _DEFAULT_CONFIG = {
+    "vl_provider_ids": "",
     "vl_model": {
         "provider": "openai",
         "base_url": "https://api.openai.com/v1",
         "api_key": "",
         "model": "gpt-4o",
         "timeout": 120.0,
-        "concurrency": 25,
+        "concurrency": 50,
         "max_retries": 2,
     },
-    "example": "在 WebUI 配置中填写 vl_model.api_key 即可使用，支持 OpenAI 兼容 API。",
+    "example": "推荐在 WebUI 中填写 vl_provider_ids（AstrBot 已保存的模型 ID，逗号分隔，按降级顺序排列）。也可手动填写 vl_model 作为回退。",
 }
 
 
@@ -77,6 +78,20 @@ class Main(star.Star):
             vl_model = web_config.get("vl_model")
             if isinstance(vl_model, dict):
                 _config["vl_model"] = vl_model
+            vl_provider_ids = web_config.get("vl_provider_ids", "")
+            if vl_provider_ids:
+                _config["vl_provider_ids"] = vl_provider_ids
+
+        # 从 AstrBot context 读取已保存的模型提供商列表
+        providers = []
+        try:
+            for prov in context.get_all_providers():
+                pc = getattr(prov, "provider_config", None)
+                if isinstance(pc, dict) and pc.get("id"):
+                    providers.append(pc)
+        except Exception as e:
+            logger.warning(f"读取 AstrBot provider 列表失败: {e}")
+        _tool_config.set_providers(providers)
 
         _tool_config.set_config(_config, plug_dir)
 

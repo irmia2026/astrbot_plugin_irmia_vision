@@ -204,6 +204,7 @@ vision_read 只负责把图读完存进数据库。
 - 查询时优先用自然语言关键词，或按 `path`/`filename` 查询。
 - 路径可以是相对路径或绝对路径，文件夹会自动递归识别常见图片格式。
 - 只处理图片：`png`、`jpg`、`jpeg`、`webp`、`gif`、`bmp`。
+- VL 模型由用户在 AstrBot WebUI 中配置（`vl_provider_ids` 或 `vl_model`），支持多模型降级，你无需关心具体用哪个模型。
 
 ## 反模式
 

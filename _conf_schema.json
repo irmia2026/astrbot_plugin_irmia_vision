@@ -1,10 +1,16 @@
 {
   "VL 模型配置": {
-    "description": "配置视觉语言模型（VL）的连接参数，支持 OpenAI 兼容 API。修改后重载插件生效。",
+    "description": "配置视觉语言模型（VL）。推荐填写 vl_provider_ids 直接复用 AstrBot 已保存的模型；也可手动填写 vl_model 作为回退。修改后重载插件生效。",
     "type": "object",
     "items": {
+      "vl_provider_ids": {
+        "description": "AstrBot 已保存的模型提供商 ID（逗号分隔，按降级顺序排列）。留空则使用下方 vl_model 手动配置。",
+        "hint": "例如：my-gpt4o,my-claude,my-qwen-vl。在 AstrBot WebUI「模型管理」中可查看各模型的 ID。",
+        "type": "string",
+        "default": ""
+      },
       "vl_model": {
-        "description": "VL 模型连接参数",
+        "description": "手动 VL 模型连接参数（当 vl_provider_ids 为空时生效）",
         "type": "object",
         "items": {
           "provider": {

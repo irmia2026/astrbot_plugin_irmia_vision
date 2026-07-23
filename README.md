@@ -26,6 +26,22 @@ pip install -r requirements.txt
 
 ## 配置示例
 
+### 推荐方式：复用 AstrBot 已保存的模型
+
+在 AstrBot WebUI 插件配置中填写 `vl_provider_ids`，直接复用你在「模型管理」中已保存的模型提供商，无需重复输入 API Key：
+
+```
+vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
+```
+
+- 逗号分隔，**按降级顺序排列**：第一个失败时自动尝试第二个，依此类推。
+- 插件启动时自动从 AstrBot 读取所有已保存的 CHAT_COMPLETION 类型模型，按 ID 匹配。
+- 如果某个 ID 不存在或对应模型无 API Key，会自动跳过。
+
+### 回退方式：手动配置
+
+如果 `vl_provider_ids` 为空，则使用 `vl_model` 手动配置：
+
 ```json
 {
   "vl_model": {
@@ -46,6 +62,7 @@ pip install -r requirements.txt
 
 | 字段 | 说明 |
 |---|---|
+| `vl_provider_ids` | AstrBot 已保存的模型 ID（逗号分隔，按降级顺序）。**推荐填写。** |
 | `provider` | 提供商标识，目前仅用于日志展示。 |
 | `base_url` | OpenAI 兼容 API 的 base URL。 |
 | `api_key` | API 密钥。 |
@@ -123,6 +140,7 @@ pip install -r requirements.txt
 - `vision_read` 只返回摘要，详细内容请用 `vision_query` 查询。
 - 路径支持绝对路径、相对路径和 `~` 用户主目录。
 - 并发数默认根据 `timeout` 自适应，避免把慢 API 打挂。如需固定，可配置 `concurrency`。
+- 支持多模型降级：`vl_provider_ids` 中靠前的模型失败时自动切换到下一个。
 
 ## 开发
 

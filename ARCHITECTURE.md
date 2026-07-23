@@ -56,7 +56,7 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 
 | 文件 | 职责 |
 |---|---|
-| `main.py` | 插件入口：加载配置、初始化数据库、注册工具 |
+| `main.py` | 插件入口：加载配置、从 AstrBot context 读取已保存模型列表、初始化数据库、注册工具 |
 | `tools/_registry.py` | 工厂函数 `make_tool`，注册三个工具实例 |
 | `tools/vision_read.py` | 扫描路径、缓存判断、调用 VL、落库、返回摘要 |
 | `tools/vision_query.py` | 按多种条件查询缓存结果，支持 peek/full 模式 |
@@ -64,7 +64,7 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 | `tools/_store.py` | 存储抽象层：定义 `VisionStore` 基类，默认 `SQLiteVisionStore` |
 | `tools/_vl_client.py` | OpenAI 兼容 VL 客户端 |
 | `tools/_helpers.py` | `unwrap`、`proposal_reply`、`run_sync` |
-| `tools/config.py` | 插件配置内存管理 |
+| `tools/config.py` | 插件配置内存管理、provider 降级链解析 |
 | `tools/tool_stats.py` | 工具调用统计 |
 | `skills/vision-read/SKILL.md` | LLM 工作流提示 |
 
@@ -82,6 +82,17 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 3. 在 `create_store()` 中根据 `db_uri` 协议前缀分发。
 
 切换后端后，工具调用方无需改动，因为 `vision_read` / `vision_query` 只依赖 `VisionStore` 接口。
+
+## VL 模型配置与降级
+
+插件启动时通过 `context.get_all_providers()` 读取 AstrBot 已保存的所有 CHAT_COMPLETION 类型模型，存入内存。
+
+配置优先级：
+
+1. `vl_provider_ids`（逗号分隔的 AstrBot 模型 ID，按降级顺序排列）→ 从已保存模型中匹配。
+2. `vl_model`（手动填写的 base_url / api_key / model）→ 回退配置。
+
+读图时按降级链顺序尝试：第一个模型失败（超时/报错/无 key）自动切换下一个，直到成功或全部失败。
 
 ## 关键约定
 

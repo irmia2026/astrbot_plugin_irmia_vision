@@ -15,7 +15,7 @@ from PIL import Image
 from ._helpers import proposal_reply
 from ._store import VisionStore
 from ._vl_client import MAX_IMAGE_SIZE, read_image as vl_read_image
-from .config import get_vl_model_config
+from .config import resolve_provider_chain
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 DEFAULT_PROMPT = (
@@ -106,12 +106,18 @@ async def read(
         )
 
     prompt = question if question else DEFAULT_PROMPT
-    model_cfg = get_vl_model_config()
-    model_id = model_cfg.get("model", "unknown")
-    key = model_cfg.get("api_key", "")
-    concurrency = _adaptive_concurrency(model_cfg)
-    max_retries = max(0, int(model_cfg.get("max_retries", 2)))
-    vl_timeout = float(model_cfg.get("timeout", 120.0))
+    chain = resolve_provider_chain()
+    if not chain:
+        return proposal_reply(
+            False,
+            "未配置任何 VL 模型。请在 AstrBot WebUI 中填写 vl_provider_ids（已保存的模型 ID），或手动配置 vl_model。",
+            options=["去配置 vl_provider_ids", "使用 vision_query 查询已缓存结果"],
+        )
+    primary = chain[0]
+    model_id = primary.get("model", "unknown")
+    concurrency = _adaptive_concurrency(primary)
+    max_retries = max(0, int(primary.get("max_retries", 2)))
+    vl_timeout = float(primary.get("timeout", 120.0))
 
     previous_result = None
     if previous_result_id:
@@ -153,26 +159,35 @@ async def read(
                 cached_count += 1
                 return
 
-            if not key:
-                failed_count += 1
-                failed_paths.append(f"{path}: 未配置 vl_model.api_key")
-                return
-
             _check_image_size(path)
             phash = _compute_phash(path)
             final_prompt = prompt + previous_context if previous_context else prompt
 
             raw = ""
-            for attempt in range(max_retries + 1):
-                async with semaphore:
-                    try:
-                        raw = await vl_read_image(path, final_prompt, client=_httpx_client)
+            last_err: Exception | None = None
+            for vl_cfg in chain:
+                if not vl_cfg.get("api_key"):
+                    continue
+                for attempt in range(max_retries + 1):
+                    async with semaphore:
+                        try:
+                            raw = await vl_read_image(path, final_prompt, client=_httpx_client, vl_config=vl_cfg)
+                            last_err = None
+                            break
+                        except Exception as e:
+                            last_err = e
+                            if attempt < max_retries:
+                                logger.warning(f"读图重试 {path} (provider={vl_cfg.get('model','')}): {e}")
+                                await asyncio.sleep(1.0)
+                    if last_err is None:
                         break
-                    except Exception as e:
-                        if attempt == max_retries:
-                            raise
-                        logger.warning(f"读图重试 {path}: {e}")
-                        await asyncio.sleep(1.0)
+                if last_err is None:
+                    break
+                logger.warning(f"provider {vl_cfg.get('model','')} 失败，尝试降级: {last_err}")
+            if last_err is not None:
+                raise last_err
+            if not raw:
+                raise ValueError("所有 VL 模型均未配置 api_key，无法读图")
 
             parsed = _parse_result(raw)
             result_id = f"res_{uuid.uuid4().hex[:12]}"
@@ -211,11 +226,11 @@ async def read(
     finally:
         await _httpx_client.aclose()
 
-    if not key and read_count == 0 and cached_count == 0:
+    if read_count == 0 and cached_count == 0 and failed_count > 0:
         return proposal_reply(
             False,
-            "未配置 VL 模型的 api_key，无法读取新图片。请在 AstrBot WebUI 或 config.json 中配置 vl_model.api_key。",
-            options=["去配置 api_key", "使用 vision_query 查询已缓存结果"],
+            "所有 VL 模型均调用失败。请检查 vl_provider_ids 对应的模型是否可用，或检查 vl_model.api_key 配置。",
+            options=["检查模型配置", "使用 vision_query 查询已缓存结果"],
         )
 
     if failed_count > 0 and read_count == 0 and cached_count == 0:

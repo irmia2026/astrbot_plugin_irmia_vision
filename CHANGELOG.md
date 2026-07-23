@@ -1,5 +1,20 @@
 # 更新日志
 
+## 1.1.0
+
+### 新增
+
+- **自动读取 AstrBot 已保存模型**：插件启动时通过 `context.get_all_providers()` 自动获取所有 CHAT_COMPLETION 类型模型，无需手动输入 base_url / api_key。
+- **`vl_provider_ids` 配置项**：在 WebUI 中填写 AstrBot 模型 ID（逗号分隔），按降级顺序排列。第一个失败时自动切换下一个。
+- **多模型降级链**：`vision_read` 按 `vl_provider_ids` 顺序逐个尝试，全部失败才报错。
+- `config.py` 新增 `resolve_provider_chain()` 解析降级链，`set_providers()` / `get_providers()` 管理 provider 列表。
+- `_vl_client.py` 的 `read_image()` 新增 `vl_config` 参数，支持显式传入 VL 配置。
+
+### 变更
+
+- `_conf_schema.json` 新增 `vl_provider_ids` 字段，推荐优先使用。
+- `vl_model` 手动配置降级为回退方案（`vl_provider_ids` 为空时生效）。
+
 ## 1.0.2
 
 ### 新增

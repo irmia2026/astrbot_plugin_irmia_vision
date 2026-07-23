@@ -68,19 +68,21 @@ def encode_image(path: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(raw).decode('utf-8')}"
 
 
-async def read_image(path: str, prompt: str, *, max_tokens: int = 2048, client = None) -> str:
-    """异步调用用户配置的 VL 模型读取图片，返回文本结果。
+async def read_image(path: str, prompt: str, *, max_tokens: int = 2048, client=None, vl_config: dict | None = None) -> str:
+    """异步调用 VL 模型读取图片，返回文本结果。
 
-    支持传入外部 httpx.AsyncClient 以共享连接池，减少并发时的建连开销。
+    Args:
+        vl_config: 显式传入的 VL 配置（来自 provider 降级链）。为 None 时回退到全局配置。
+        client: 外部 httpx.AsyncClient 以共享连接池。
     """
-    cfg = get_vl_model_config()
+    cfg = vl_config if vl_config is not None else get_vl_model_config()
     base_url = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
     api_key = cfg.get("api_key", "")
     model = cfg.get("model", "gpt-4o")
     timeout = cfg.get("timeout", 120.0)
 
     if not api_key:
-        raise ValueError("未配置 vl_model.api_key")
+        raise ValueError("未配置 VL 模型的 api_key（vl_provider_ids 或 vl_model.api_key）")
 
     size = os.path.getsize(path)
     if size > MAX_IMAGE_SIZE:

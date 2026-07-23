@@ -50,6 +50,7 @@ async def _run_vision_read_hits_cache(tmp_path):
     db = create_store(db_path)
     tool_config.set_config(
         {
+            "vl_provider_ids": "",
             "vl_model": {
                 "provider": "openai",
                 "base_url": "https://api.openai.com/v1",
@@ -60,6 +61,7 @@ async def _run_vision_read_hits_cache(tmp_path):
         },
         str(tmp_path),
     )
+    tool_config.set_providers([])
 
     db.insert(
         sha256=db.sha256_of_file(str(img)),
@@ -100,6 +102,7 @@ async def _run_vision_read_missing_key(tmp_path):
     db = create_store(db_path)
     tool_config.set_config(
         {
+            "vl_provider_ids": "",
             "vl_model": {
                 "provider": "openai",
                 "base_url": "https://api.openai.com/v1",
@@ -109,6 +112,7 @@ async def _run_vision_read_missing_key(tmp_path):
         },
         str(tmp_path),
     )
+    tool_config.set_providers([])
 
     from tools import vision_read
 
@@ -120,4 +124,4 @@ async def _run_vision_read_missing_key(tmp_path):
 def test_vision_read_missing_key_for_new_image(tmp_path):
     result = asyncio.run(_run_vision_read_missing_key(tmp_path))
     assert result["ok"] is False
-    assert "api_key" in result["proposal"]
+    assert "api_key" in result["proposal"] or "VL 模型" in result["proposal"]
