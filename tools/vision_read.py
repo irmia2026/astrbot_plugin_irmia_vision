@@ -114,10 +114,10 @@ async def read(
             options=["去配置 vl_provider_ids", "使用 vision_query 查询已缓存结果"],
         )
     primary = chain[0]
-    model_id = primary.get("model", "unknown")
     concurrency = _adaptive_concurrency(primary)
     max_retries = max(0, int(primary.get("max_retries", 2)))
-    vl_timeout = float(primary.get("timeout", 120.0))
+    # 用降级链中最大的 timeout 构建共享 client，避免 fallback 被 primary 的短 timeout 截断
+    vl_timeout = max(float(cfg.get("timeout", 120.0)) for cfg in chain)
 
     previous_result = None
     if previous_result_id:
@@ -154,7 +154,7 @@ async def read(
 
             cached = None
             if not is_follow_up and not force_reread:
-                cached = db.find_cached(sha256, filename, model_id, question)
+                cached = db.find_cached(sha256, filename, primary.get("model", "unknown"), question)
             if cached:
                 cached_count += 1
                 return
@@ -164,6 +164,7 @@ async def read(
             final_prompt = prompt + previous_context if previous_context else prompt
 
             raw = ""
+            used_model = ""
             last_err: Exception | None = None
             for vl_cfg in chain:
                 if not vl_cfg.get("api_key"):
@@ -173,14 +174,15 @@ async def read(
                         try:
                             raw = await vl_read_image(path, final_prompt, client=_httpx_client, vl_config=vl_cfg)
                             last_err = None
+                            used_model = vl_cfg.get("model", "unknown")
                             break
                         except Exception as e:
                             last_err = e
-                            if attempt < max_retries:
-                                logger.warning(f"读图重试 {path} (provider={vl_cfg.get('model','')}): {e}")
-                                await asyncio.sleep(1.0)
                     if last_err is None:
                         break
+                    if attempt < max_retries:
+                        logger.warning(f"读图重试 {path} (provider={vl_cfg.get('model','')}): {last_err}")
+                        await asyncio.sleep(1.0)
                 if last_err is None:
                     break
                 logger.warning(f"provider {vl_cfg.get('model','')} 失败，尝试降级: {last_err}")
@@ -196,7 +198,7 @@ async def read(
                 sha256=sha256,
                 filename=filename,
                 phash=phash,
-                model_id=model_id,
+                model_id=used_model or primary.get("model", "unknown"),
                 question=question,
                 result_id=result_id,
                 source_value=path,

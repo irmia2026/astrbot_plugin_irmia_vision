@@ -40,7 +40,12 @@ def get_vl_model_config() -> dict:
 def _provider_to_vl_config(provider: dict) -> dict:
     """将 AstrBot provider_config 转换为本插件使用的 VL 模型配置格式。"""
     keys = provider.get("key", [])
-    api_key = keys[0] if keys else ""
+    if isinstance(keys, list):
+        api_key = keys[0] if keys else ""
+    elif isinstance(keys, str):
+        api_key = keys
+    else:
+        api_key = ""
     return {
         "provider": provider.get("type", "openai_chat_completion"),
         "base_url": provider.get("api_base", "https://api.openai.com/v1"),
