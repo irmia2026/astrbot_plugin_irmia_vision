@@ -93,8 +93,37 @@ class Main(star.Star):
             logger.warning(f"读取 AstrBot provider 列表失败: {e}")
         _tool_config.set_providers(providers)
 
+        # 将可用模型 ID 写入 _conf_schema.json 的 options，供 WebUI 下拉选择
+        if providers:
+            provider_ids = [p["id"] for p in providers]
+            provider_labels = [
+                f"{p['id']} ({p.get('model', '?')})" for p in providers
+            ]
+            self._update_schema_options(plug_dir, provider_ids, provider_labels)
+            logger.info(f"irmia_vision: 发现 {len(providers)} 个已保存模型: {', '.join(provider_ids)}")
+
         _tool_config.set_config(_config, plug_dir)
 
         tools = register_tools(db_path)
         context.add_llm_tools(*tools)
         logger.info(f"irmia_vision ready — {len(tools)} tools registered")
+
+    @staticmethod
+    def _update_schema_options(plug_dir: str, ids: list[str], labels: list[str]) -> None:
+        """将可用模型 ID 写入 _conf_schema.json 的 vl_provider_ids.options，
+        使 WebUI 下次刷新时显示下拉选择框。"""
+        import json
+
+        schema_path = os.path.join(plug_dir, "_conf_schema.json")
+        try:
+            with open(schema_path, "r", encoding="utf-8") as f:
+                schema = json.load(f)
+            items = schema.get("VL 模型配置", {}).get("items", {})
+            field = items.get("vl_provider_ids")
+            if field is not None:
+                field["options"] = ids
+                field["labels"] = labels
+                with open(schema_path, "w", encoding="utf-8") as f:
+                    json.dump(schema, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass  # 写入失败不影响功能
