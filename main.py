@@ -13,6 +13,9 @@ from .tools import config as _tool_config
 from .tools._registry import register_tools
 
 _DEFAULT_CONFIG = {
+    "vl_provider_1": "",
+    "vl_provider_2": "",
+    "vl_provider_3": "",
     "vl_provider_ids": "",
     "vl_model": {
         "provider": "openai",
@@ -23,7 +26,6 @@ _DEFAULT_CONFIG = {
         "concurrency": 50,
         "max_retries": 2,
     },
-    "example": "推荐在 WebUI 中填写 vl_provider_ids（AstrBot 已保存的模型 ID，逗号分隔，按降级顺序排列）。也可手动填写 vl_model 作为回退。",
 }
 
 
@@ -78,9 +80,22 @@ class Main(star.Star):
             vl_model = web_config.get("vl_model")
             if isinstance(vl_model, dict):
                 _config["vl_model"] = vl_model
-            vl_provider_ids = web_config.get("vl_provider_ids", "")
-            if vl_provider_ids:
-                _config["vl_provider_ids"] = vl_provider_ids
+            # 三个下拉框合并为降级链
+            p1 = str(web_config.get("vl_provider_1", "") or "").strip()
+            p2 = str(web_config.get("vl_provider_2", "") or "").strip()
+            p3 = str(web_config.get("vl_provider_3", "") or "").strip()
+            if p1 or p2 or p3:
+                _config["vl_provider_1"] = p1
+                _config["vl_provider_2"] = p2
+                _config["vl_provider_3"] = p3
+                # 合并为 vl_provider_ids 供 resolve_provider_chain 使用
+                merged = ",".join(x for x in [p1, p2, p3] if x)
+                _config["vl_provider_ids"] = merged
+            else:
+                # 回退到手动填写的 vl_provider_ids
+                vl_provider_ids = web_config.get("vl_provider_ids", "")
+                if vl_provider_ids:
+                    _config["vl_provider_ids"] = vl_provider_ids
 
         # 从 AstrBot context 读取已保存的模型提供商列表
         providers = []
@@ -110,7 +125,7 @@ class Main(star.Star):
 
     @staticmethod
     def _update_schema_options(plug_dir: str, ids: list[str], labels: list[str]) -> None:
-        """将可用模型 ID 写入 _conf_schema.json 的 vl_provider_ids.options，
+        """将可用模型 ID 写入 _conf_schema.json 的三个下拉框字段，
         使 WebUI 下次刷新时显示下拉选择框。"""
         import json
 
@@ -119,10 +134,14 @@ class Main(star.Star):
             with open(schema_path, "r", encoding="utf-8") as f:
                 schema = json.load(f)
             items = schema.get("VL 模型配置", {}).get("items", {})
-            field = items.get("vl_provider_ids")
-            if field is not None:
-                field["options"] = ids
-                field["labels"] = labels
+            changed = False
+            for field_name in ("vl_provider_1", "vl_provider_2", "vl_provider_3"):
+                field = items.get(field_name)
+                if field is not None:
+                    field["options"] = ids
+                    field["labels"] = labels
+                    changed = True
+            if changed:
                 with open(schema_path, "w", encoding="utf-8") as f:
                     json.dump(schema, f, ensure_ascii=False, indent=2)
         except Exception:

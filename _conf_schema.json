@@ -1,16 +1,34 @@
 {
   "VL 模型配置": {
-    "description": "配置视觉语言模型（VL）。推荐填写 vl_provider_ids 直接复用 AstrBot 已保存的模型；也可手动填写 vl_model 作为回退。修改后重载插件生效。",
+    "description": "配置视觉语言模型（VL）。从 AstrBot 已保存的模型中按优先级选择，第一个不可用时自动降级到下一个。全部留空则自动使用所有已保存模型。修改后重载插件生效。",
     "type": "object",
     "items": {
+      "vl_provider_1": {
+        "description": "首选 VL 模型",
+        "hint": "从 AstrBot 已保存的模型中选择。留空则自动使用全部。",
+        "type": "string",
+        "default": ""
+      },
+      "vl_provider_2": {
+        "description": "次选 VL 模型（首选不可用时降级）",
+        "hint": "留空则跳过。",
+        "type": "string",
+        "default": ""
+      },
+      "vl_provider_3": {
+        "description": "再次选 VL 模型（次选也不可用时降级）",
+        "hint": "留空则跳过。",
+        "type": "string",
+        "default": ""
+      },
       "vl_provider_ids": {
-        "description": "AstrBot 已保存的模型提供商 ID（逗号分隔，按降级顺序排列）。留空则自动使用 AstrBot 中所有已保存的模型。",
-        "hint": "留空 = 自动使用全部已保存模型。如需指定顺序，填写模型 ID，例如：my-gpt4o,my-claude。在 AstrBot WebUI「模型管理」中可查看各模型的 ID。",
+        "description": "高级：手动填写模型 ID（逗号分隔，按降级顺序）。填写后覆盖上方三个下拉框。",
+        "hint": "一般不需要填。留空则使用上方下拉框的选择。",
         "type": "string",
         "default": ""
       },
       "vl_model": {
-        "description": "手动 VL 模型连接参数（当 vl_provider_ids 为空时生效）",
+        "description": "手动 VL 模型连接参数（当以上所有配置均为空时生效）",
         "type": "object",
         "items": {
           "provider": {
