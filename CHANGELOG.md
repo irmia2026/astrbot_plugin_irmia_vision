@@ -1,19 +1,28 @@
 # 更新日志
 
-## 1.1.0
+## 1.0.3
 
 ### 新增
 
 - **自动读取 AstrBot 已保存模型**：插件启动时通过 `context.get_all_providers()` 自动获取所有 CHAT_COMPLETION 类型模型，无需手动输入 base_url / api_key。
-- **`vl_provider_ids` 配置项**：在 WebUI 中填写 AstrBot 模型 ID（逗号分隔），按降级顺序排列。第一个失败时自动切换下一个。
-- **多模型降级链**：`vision_read` 按 `vl_provider_ids` 顺序逐个尝试，全部失败才报错。
+- **WebUI 三下拉框选择模型**：`vl_provider_1`（首选）、`vl_provider_2`（次选）、`vl_provider_3`（再次选），插件加载时自动拉取可用模型列表写入下拉选项。
+- **多模型降级链**：读图时按首选 → 次选 → 再次选顺序逐个尝试，每个模型独立重试，全部失败才报错。
+- **零配置开箱即用**：三个下拉框全部留空时，自动使用 AstrBot 中所有已保存的模型。
 - `config.py` 新增 `resolve_provider_chain()` 解析降级链，`set_providers()` / `get_providers()` 管理 provider 列表。
 - `_vl_client.py` 的 `read_image()` 新增 `vl_config` 参数，支持显式传入 VL 配置。
+- `vl_provider_ids` 高级字段保留，手动填写后覆盖下拉框选择。
+
+### 修复
+
+- fallback provider 的 timeout 不再被 primary 的共享 client 截断（取链中最大值）。
+- retry sleep 移到 semaphore 外，避免浪费并发槽位。
+- `model_id` 缓存标记改为实际成功的 provider，而非始终取 chain[0]。
+- provider 的 `key` 字段为字符串时也能正确提取（不再假设一定是列表）。
 
 ### 变更
 
-- `_conf_schema.json` 新增 `vl_provider_ids` 字段，推荐优先使用。
-- `vl_model` 手动配置降级为回退方案（`vl_provider_ids` 为空时生效）。
+- `_conf_schema.json` 新增 `vl_provider_1/2/3` 三个下拉框字段。
+- `vl_model` 手动配置降级为最终回退方案。
 
 ## 1.0.2
 

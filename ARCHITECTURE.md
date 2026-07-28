@@ -85,12 +85,14 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 
 ## VL 模型配置与降级
 
-插件启动时通过 `context.get_all_providers()` 读取 AstrBot 已保存的所有 CHAT_COMPLETION 类型模型，存入内存。
+插件启动时通过 `context.get_all_providers()` 读取 AstrBot 已保存的所有 CHAT_COMPLETION 类型模型，存入内存，并写入 `_conf_schema.json` 的 `options` 字段供 WebUI 下拉选择。
 
 配置优先级：
 
-1. `vl_provider_ids`（逗号分隔的 AstrBot 模型 ID，按降级顺序排列）→ 从已保存模型中匹配。
-2. `vl_model`（手动填写的 base_url / api_key / model）→ 回退配置。
+1. `vl_provider_1` / `vl_provider_2` / `vl_provider_3`（WebUI 三个下拉框，按优先级排列）→ 合并为降级链。
+2. `vl_provider_ids`（高级：手动填写逗号分隔 ID）→ 覆盖下拉框。
+3. 以上全空 → 自动使用所有已保存模型（按保存顺序）。
+4. 无任何已保存模型 → 回退到 `vl_model` 手动配置。
 
 读图时按降级链顺序尝试：第一个模型失败（超时/报错/无 key）自动切换下一个，直到成功或全部失败。
 
