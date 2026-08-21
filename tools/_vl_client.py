@@ -68,7 +68,7 @@ def encode_image(path: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(raw).decode('utf-8')}"
 
 
-async def read_image(path: str, prompt: str, *, max_tokens: int = 2048, client=None, vl_config: dict | None = None) -> str:
+async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=None, vl_config: dict | None = None) -> str:
     """异步调用 VL 模型读取图片，返回文本结果。
 
     Args:
@@ -130,7 +130,14 @@ async def read_image(path: str, prompt: str, *, max_tokens: int = 2048, client=N
             )
     resp.raise_for_status()
     data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    msg = data["choices"][0]["message"]
+    content = msg.get("content") or ""
+    if not content:
+        # DeepSeek 推理模型（如 deepseek-v4-flash-vision-exp）思考模式下
+        # 思维链走 reasoning_content 字段，content 可能为空（token 被思考耗尽）。
+        # 回退到 reasoning_content，保证结果不为空。
+        content = msg.get("reasoning_content") or ""
+    return content
 
 
 def encode_image_to_base64(path: str) -> str:
