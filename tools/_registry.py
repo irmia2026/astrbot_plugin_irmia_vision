@@ -15,6 +15,7 @@ from ._store import create_store, VisionStore
 from . import vision_read as _vision_read
 from . import vision_query as _vision_query
 from . import vision_export as _vision_export
+from . import see_window as _see_window
 
 
 @dataclass
@@ -173,6 +174,35 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                 "required": [],
             },
             fn=_vision_export.export,
+            db=db,
+        ),
+        make_tool(
+            name="see_window",
+            description="当你需要快速了解用户电脑屏幕上正在发生什么、用户在干什么时调用：截取整个屏幕或指定窗口的画面，用 VL 模型分析并落库。适合：用户求助时先看屏幕判断现场、检查程序运行状态或报错、了解用户当前操作。window 参数传窗口标题关键词（如 'Visual Studio Code'、'qq'），留空则截全屏；找不到窗口时会返回当前可见窗口列表。分析结果存库，可用 vision_query 查看。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "window": {
+                        "type": "string",
+                        "description": "可选。窗口标题关键词（精确或包含匹配，支持 vs code/qq/wechat 等常见缩写）。留空或省略=截取整个屏幕。",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "可选。自定义分析问题。留空使用默认提示词（偏向判断用户在干什么、屏幕上的关键信息）。",
+                    },
+                    "force_reread": {
+                        "type": "boolean",
+                        "description": "可选。忽略缓存强制重新截图分析。",
+                        "default": False,
+                    },
+                    "previous_result_id": {
+                        "type": "string",
+                        "description": "可选。追问模式：传入之前 see_window/vision_read 的 result_id，基于之前的理解回答新问题。",
+                    },
+                },
+                "required": [],
+            },
+            fn=_see_window.see_window,
             db=db,
         ),
     ]

@@ -3,7 +3,7 @@ name: vision-read
 description: >
   主动读图工作流。触发：当你在任何场景下需要获取图片中的视觉信息——包括用户明确要求看图片、以及你在文件操作（dir_list、es_search、目录遍历等）中自行发现了 .jpg/.png/.webp/.bmp 等图片文件并认为其内容可能与当前任务相关。
   核心原则：先批量读图落库，再按需查询结果，避免把大量图片描述塞进上下文。
-  可用工具：vision_read、vision_query、vision_export。
+  可用工具：vision_read、vision_query、vision_export、see_window。
 ---
 
 # 视觉读图工作流

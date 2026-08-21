@@ -6,11 +6,12 @@
 
 ## 工具
 
-三个工具，差分明显：
+四个工具，差分明显：
 
 - `vision_read`：读图并落库，只返回摘要，不返回每张图的详细内容。
 - `vision_query`：查询已落库的结果。列表查询返回轻量摘要（peek 模式），`result_id` 精确查询返回完整信息（full 模式）。
 - `vision_export`：把符合条件的结果导出为 JSON/CSV 文件，方便外部脚本批量处理。
+- `see_window`：截取整个屏幕或指定窗口画面，用 VL 模型分析（默认提示词偏向判断用户在干什么），仅支持 Windows。
 
 ## 数据流
 
@@ -57,10 +58,11 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 | 文件 | 职责 |
 |---|---|
 | `main.py` | 插件入口：加载配置、从 AstrBot context 读取已保存模型列表、初始化数据库、注册工具 |
-| `tools/_registry.py` | 工厂函数 `make_tool`，注册三个工具实例 |
+| `tools/_registry.py` | 工厂函数 `make_tool`，注册四个工具实例 |
 | `tools/vision_read.py` | 扫描路径、缓存判断、调用 VL、落库、返回摘要 |
 | `tools/vision_query.py` | 按多种条件查询缓存结果，支持 peek/full 模式 |
 | `tools/vision_export.py` | 批量导出已读图结果为 JSON/CSV，方便外部脚本处理 |
+| `tools/see_window.py` | Windows 屏幕/窗口截图分析（win32gui 枚举窗口 + PIL 截图），复用 vision_read 读图管线 |
 | `tools/_store.py` | 存储抽象层：定义 `VisionStore` 基类，默认 `SQLiteVisionStore` |
 | `tools/_vl_client.py` | OpenAI 兼容 VL 客户端 |
 | `tools/_helpers.py` | `unwrap`、`proposal_reply`、`run_sync` |

@@ -185,12 +185,15 @@ async def read(
                         logger.warning(f"读图重试 {path} (provider={vl_cfg.get('model','')}): {last_err}")
                         await asyncio.sleep(1.0)
                 if last_err is None:
-                    break
+                    if raw:
+                        break  # 调用成功且返回内容
+                    # 调用成功但返回空内容（如模型不支持视觉输入）→ 视为失败，继续降级
+                    last_err = ValueError(f"模型 {vl_cfg.get('model','')} 返回空内容")
                 logger.warning(f"provider {vl_cfg.get('model','')} 失败，尝试降级: {last_err}")
             if last_err is not None:
                 raise last_err
             if not raw:
-                raise ValueError("所有 VL 模型均未配置 api_key，无法读图")
+                raise ValueError("所有 VL 模型均返回空内容，无法读图")
 
             parsed = _parse_result(raw)
             result_id = f"res_{uuid.uuid4().hex[:12]}"
