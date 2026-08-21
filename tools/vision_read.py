@@ -106,18 +106,14 @@ async def read(
         )
 
     prompt = question if question else DEFAULT_PROMPT
+    # 不在此处拦截空链：命中缓存（此前已读过的图）不需要 VL 模型配置。
+    # 只有存在未命中、需要调用模型的路径才要求 chain 非空（见 _read_one）。
     chain = resolve_provider_chain()
-    if not chain:
-        return proposal_reply(
-            False,
-            "未配置任何 VL 模型。请在 AstrBot WebUI 中填写 vl_provider_ids（已保存的模型 ID），或手动配置 vl_model。",
-            options=["去配置 vl_provider_ids", "使用 vision_query 查询已缓存结果"],
-        )
-    primary = chain[0]
-    concurrency = _adaptive_concurrency(primary)
-    max_retries = max(0, int(primary.get("max_retries", 2)))
+    primary = chain[0] if chain else None
+    concurrency = _adaptive_concurrency(primary) if primary else 2
+    max_retries = max(0, int((primary or {}).get("max_retries", 2)))
     # 用降级链中最大的 timeout 构建共享 client，避免 fallback 被 primary 的短 timeout 截断
-    vl_timeout = max(float(cfg.get("timeout", 120.0)) for cfg in chain)
+    vl_timeout = max(float(cfg.get("timeout", 120.0)) for cfg in chain) if chain else 120.0
 
     previous_result = None
     if previous_result_id:
@@ -154,7 +150,7 @@ async def read(
 
             cached = None
             if not is_follow_up and not force_reread:
-                cached = db.find_cached(sha256, filename, primary.get("model", "unknown"), question)
+                cached = db.find_cached(sha256, filename, (primary or {}).get("model", ""), question)
             if cached:
                 cached_count += 1
                 return
@@ -162,6 +158,11 @@ async def read(
             _check_image_size(path)
             phash = _compute_phash(path)
             final_prompt = prompt + previous_context if previous_context else prompt
+
+            if not chain:
+                raise ValueError(
+                    "未配置任何 VL 模型（vl_provider_ids 为空且 vl_model 缺少 api_key），无法读取新图片"
+                )
 
             raw = ""
             used_model = ""
@@ -198,7 +199,7 @@ async def read(
                 sha256=sha256,
                 filename=filename,
                 phash=phash,
-                model_id=used_model or primary.get("model", "unknown"),
+                model_id=used_model or (primary or {}).get("model", "unknown"),
                 question=question,
                 result_id=result_id,
                 source_value=path,
@@ -229,9 +230,14 @@ async def read(
         await _httpx_client.aclose()
 
     if read_count == 0 and cached_count == 0 and failed_count > 0:
+        chain_desc = [
+            f"{c.get('model','?')}@{c.get('base_url','')[:40]} key={'有' if c.get('api_key') else '无'}"
+            for c in chain
+        ]
+        err_detail = " | ".join(failed_paths[:3]) or "无错误详情"
         return proposal_reply(
             False,
-            "所有 VL 模型均调用失败。请检查 vl_provider_ids 对应的模型是否可用，或检查 vl_model.api_key 配置。",
+            "所有 VL 模型均调用失败。chain=" + "; ".join(chain_desc) + " | 错误: " + err_detail,
             options=["检查模型配置", "使用 vision_query 查询已缓存结果"],
         )
 

@@ -2,7 +2,7 @@ name: astrbot_plugin_irmia_vision
 display_name: 弥亚视觉工具
 desc: 为 Agent 提供主动读图能力（而非被动式框架注入），读图结果落库存储，避免重复调用 VL 模型并保护上下文。
 author: 伊尔弥亚
-version: 1.0.3
+version: 1.0.4
 repo: ""
 short_desc: 读图、缓存、查询
 astrbot_version: ">=4.16"

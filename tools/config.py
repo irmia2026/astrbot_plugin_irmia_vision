@@ -90,7 +90,7 @@ def resolve_provider_chain() -> list[dict]:
 
     # 回退到 vl_model 手动配置
     vl_model = _CONFIG.get("vl_model", {})
-    if vl_model:
+    if vl_model and vl_model.get("api_key"):
         return [vl_model]
 
     return []

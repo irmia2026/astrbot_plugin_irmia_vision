@@ -59,7 +59,8 @@ class Main(star.Star):
             except Exception:
                 logger.warning("配置文件读取失败，使用默认配置")
         else:
-            import copy, json
+            import copy
+            import json
 
             _config = copy.deepcopy(_DEFAULT_CONFIG)
             try:
@@ -106,6 +107,42 @@ class Main(star.Star):
                     providers.append(pc)
         except Exception as e:
             logger.warning(f"读取 AstrBot provider 列表失败: {e}")
+
+        # 兜底：插件加载早于 provider 初始化（get_all_providers 返回空）时，
+        # 从磁盘 cmd_config.json 读取 provider_sources + provider 合并构建，
+        # 保证 vl_provider_ids 能解析出带 api_key 的配置。
+        if not providers:
+            try:
+                import json as _json
+
+                cfg_path = os.path.abspath(
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "cmd_config.json")
+                )
+                if os.path.exists(cfg_path):
+                    # cmd_config.json 可能带 UTF-8 BOM，用 utf-8-sig 兼容
+                    with open(cfg_path, "r", encoding="utf-8-sig") as f:
+                        disk_cfg = _json.load(f)
+                    sources = {
+                        ps.get("id"): ps
+                        for ps in disk_cfg.get("provider_sources", [])
+                        if ps.get("id")
+                    }
+                    for pc in disk_cfg.get("provider", []):
+                        if not pc.get("id") or not pc.get("enable", True):
+                            continue
+                        if pc.get("type") is None and not pc.get("provider_source_id"):
+                            continue  # 跳过无法解析的占位记录
+                        merged = dict(pc)
+                        psid = pc.get("provider_source_id", "")
+                        if psid and psid in sources:
+                            merged = {**sources[psid], **pc}
+                            merged["id"] = pc["id"]
+                        providers.append(merged)
+                    logger.info(
+                        f"irmia_vision: 插件加载早于 provider 初始化，从磁盘配置兜底读取 {len(providers)} 个 provider"
+                    )
+            except Exception as e:
+                logger.warning(f"irmia_vision: 磁盘配置兜底失败: {e}")
         _tool_config.set_providers(providers)
 
         # 将可用模型 ID 写入 _conf_schema.json 的 options，供 WebUI 下拉选择

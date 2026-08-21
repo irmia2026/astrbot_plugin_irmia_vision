@@ -113,10 +113,17 @@ class SQLiteVisionStore(VisionStore):
 
     def find_cached(self, sha256: str, filename: str, model_id: str, question: str = "") -> dict | None:
         db = self._ensure_conn()
-        row = db.execute(
-            "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND filename = ? AND model_id = ? AND question = ?",
-            (sha256, filename, model_id, question),
-        ).fetchone()
+        if model_id:
+            row = db.execute(
+                "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND filename = ? AND model_id = ? AND question = ?",
+                (sha256, filename, model_id, question),
+            ).fetchone()
+        else:
+            # model_id 为空时放宽为任意模型命中（同一张图的缓存不因换配置而失效）
+            row = db.execute(
+                "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND filename = ? AND question = ?",
+                (sha256, filename, question),
+            ).fetchone()
         if row:
             db.execute(
                 "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
