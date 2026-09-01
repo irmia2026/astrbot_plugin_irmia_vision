@@ -20,49 +20,27 @@ from ._vl_client import ImageTooLargeError, normalize_detail, read_image as vl_r
 from .config import resolve_provider_chain
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-# v2 提示词：目标从「为视障人士描述」改为「为智能体提供事实性、可检索的结构化档案」，
-# 按图片类型分流描述重点，文字要求逐字原文提取，明确「看不清」处理。
+# v3 提示词：刻意精简。只保留解析契约（JSON schema）与三条质量护栏
+# （原文提取 / 不猜测 / 中文），把描述重点的判断权交给模型，
+# 避免类型枚举清单把模型注意力锚死在清单内维度、忽略清单外的细节。
 DEFAULT_PROMPT = (
-    "你是一位图像分析助手。请基于图片内容给出事实性、可检索的结构化输出，"
-    "供智能体后续查询与决策使用。\n\n"
-    "【图片类型】先判断图片属于哪一类：照片 / 截图 / 文档 / 表格 / 发票票据 / 代码 / "
-    "UI界面 / 图表 / 其他，并据此调整描述重点。\n\n"
-    "【text 字段：按图片类型组织详细内容】\n"
-    "- 截图/UI界面：程序或界面名称、布局、菜单/按钮文字、操作状态（前台窗口、运行中、报错、进度等）\n"
-    "- 文档/发票/票据：文档类型、抬头、关键字段与数值（金额、日期、编号等，逐字准确）\n"
-    "- 代码：逐字符抄写代码内容，并说明语言与用途\n"
-    "- 照片：场景、主体（外观/姿态/表情）、空间布局、光线、色调\n"
-    "- 图表：图表类型、坐标含义、关键数据点与趋势\n"
-    "图中所有可见文字请保留原文逐字提取（不翻译、不改写、不纠错）；描述语言用中文。\n"
-    "仅依据图中可见内容，不要推测画面外信息；看不清/被遮挡/模糊的部分明确写「看不清」。\n\n"
-    "【peek 字段】一句话（不超过80字）概括：图片类型 + 主要内容 + 值得注意的关键信息"
-    "（如金额、报错、人名、数字），让没看图的人快速建立预期。\n\n"
-    "【tags 字段】3-6 个中文名词短语标签，便于检索：类型 + 主体 + 场景/领域 + 关键实体"
-    "（例如：发票、报销单、金额100元、扫描件）。"
+    "请基于图片内容输出 JSON（json）："
+    '{"peek": "一句话预览：这是什么图+最值得注意的信息", '
+    '"text": "详细描述：你注意到的一切，按图片类型自行决定重点'
+    '（如截图重在界面文字与状态、票据重在关键字段数值）", '
+    '"tags": ["3-6个中文检索标签"]}\n'
+    "要求：图中文字/数字逐字保留原文（不翻译不纠错）；只依据可见内容，"
+    "看不清的部分写「看不清」；text 用中文。不要输出 JSON 以外的任何内容。"
 )
 
 # 结构化输出：要求模型返回 JSON（peek/text/tags），插件容错解析。
-# prompt 中必须含 "json" 字样（DeepSeek JSON Output 的官方要求）——用 ```json 围栏天然带上小写。
-STRUCTURED_SUFFIX_DEFAULT = (
-    "\n\n【输出格式】只输出一个 JSON 对象（json），例如：\n"
-    "```json\n"
-    '{"peek": "一句话预览（不超过80字）", '
-    '"text": "按上述要求组织的详细内容", '
-    '"tags": ["3-6 个中文标签"]}\n'
-    "```\n"
-    "不要输出 JSON 以外的任何内容。"
-)
+# prompt 中必须含 "json" 字样（DeepSeek JSON Output 的官方要求）。
 STRUCTURED_SUFFIX_QUESTION = (
-    "\n\n请基于图片内容回答问题，遵循以下规则：\n"
-    "1. 只依据图片中可见的信息，不要推测或编造；看不清/无法确认的部分明确写「图片中无法确认」。\n"
-    "2. 涉及图中文字/数字时，保留原文逐字引用，不翻译、不改写、不纠错。\n"
-    "3. 回答语言用中文。\n\n"
-    "【输出格式】只输出一个 JSON 对象（json），例如：\n"
-    "```json\n"
-    '{"peek": "用一句话直接回答（不超过80字）", '
-    '"text": "完整回答，包含关键依据（引用的原文/数字/位置）", '
-    '"tags": ["3-6 个中文标签"]}\n'
-    "```\n"
+    "\n\n仅依据图片可见内容回答（文字/数字逐字引用原文；无法确认就明说），"
+    "输出 JSON（json）："
+    '{"peek": "一句话直接回答", '
+    '"text": "完整回答与依据", '
+    '"tags": ["3-6个检索标签"]}。'
     "不要输出 JSON 以外的任何内容。"
 )
 
@@ -110,6 +88,15 @@ def _extract_json(text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# 提示词中 JSON 骨架的示例值——弱模型可能照抄占位符原文落库，解析时识别并剔除
+_PLACEHOLDER_VALUES = frozenset({
+    "一句话预览：这是什么图+最值得注意的信息",
+    "一句话直接回答",
+    "详细描述：你注意到的一切，按图片类型自行决定重点（如截图重在界面文字与状态、票据重在关键字段数值）",
+    "完整回答与依据",
+})
+
+
 def _parse_result(raw: str) -> dict:
     """解析 VL 返回：优先按结构化 JSON（peek/text/tags）解析，
     模型不遵守格式时回退到「首行作为预览」的旧行为，读图永不因解析失败而失败。
@@ -119,6 +106,11 @@ def _parse_result(raw: str) -> dict:
     if data:
         peek = str(data.get("peek") or data.get("summary") or "").strip()
         body = str(data.get("text") or "").strip()
+        # 占位符被原样照抄时视为无内容，回退处理
+        if peek in _PLACEHOLDER_VALUES:
+            peek = ""
+        if body in _PLACEHOLDER_VALUES:
+            body = ""
         tags_raw = data.get("tags")
         tags = [str(t).strip() for t in tags_raw if str(t).strip()] if isinstance(tags_raw, list) else []
         if peek or body:
@@ -165,10 +157,9 @@ async def read(
             "未找到任何支持的图片文件。请确认路径存在，并且包含 png/jpg/jpeg/webp/gif/bmp 格式的图片。",
             options=["检查路径是否正确", "使用 vision_query 查看已有结果"],
         )
-    # 结构化输出：所有模型走 prompt 引导 + 容错解析；v4fve 额外由客户端附加 response_format。
-    # base/suffix 拆开组装：追问上下文要注入在 JSON 格式要求之前，否则模型最后看到的不是格式指令。
+    # 默认模式的 JSON 要求已并入 DEFAULT_PROMPT，无需后缀；追问模式才需要规则+格式后缀
     base_prompt = question if question else DEFAULT_PROMPT
-    prompt_suffix = STRUCTURED_SUFFIX_QUESTION if question else STRUCTURED_SUFFIX_DEFAULT
+    prompt_suffix = STRUCTURED_SUFFIX_QUESTION if question else ""
 
     # 不在此处拦截空链：命中缓存（此前已读过的图）不需要 VL 模型配置。
     # 只有存在未命中、需要调用模型的路径才要求 chain 非空（见 _read_one）。
@@ -212,8 +203,8 @@ async def read(
                 prev_sha256 = previous_result.get("sha256", "")
                 if prev_sha256 and prev_sha256 == sha256:
                     is_follow_up = True
-                    previous_peek = previous_result.get("peek", "") or previous_result.get("summary", "")
-                    previous_text = previous_result.get("text", "")
+                    previous_peek = (previous_result.get("peek", "") or previous_result.get("summary", ""))[:200]
+                    previous_text = previous_result.get("text", "")[:1000]  # 上限防超长上文
                     previous_context = f"\n之前对这张图的理解：{previous_peek}\n提取的文字：{previous_text}\n"
 
             cached = None

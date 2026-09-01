@@ -41,7 +41,7 @@ async def query(
         mode = "list"
     else:
         results = []
-        mode = "peek"
+        mode = "list"
 
     cleaned = []
     for r in results:

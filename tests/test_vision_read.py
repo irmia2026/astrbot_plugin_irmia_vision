@@ -280,3 +280,58 @@ def test_allow_phash_false_disables_fallback(tmp_path):
             db.close()
 
     asyncio.run(_run())
+
+
+def test_parse_result_placeholder_copy_rejected():
+    """弱模型照抄 JSON 骨架占位符时，占位符被剔除并按兜底路径处理。"""
+    raw = '{"peek": "一句话直接回答", "text": "真正的回答内容", "tags": []}'
+    parsed = _parse_result(raw)
+    assert parsed["peek"] == "真正的回答内容"  # 占位符 peek 被剔除，用正文首行兜底
+    assert parsed["text"] == "真正的回答内容"
+
+
+def test_follow_up_context_before_json_instruction(tmp_path):
+    """追问模式：「之前的理解」上下文必须注入在 JSON 输出要求之前。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    # 预置一条同图记录作为追问上文
+    db.insert(
+        sha256=db.sha256_of_file(img_path),
+        filename="doc.png",
+        phash="",
+        model_id="fake-vl",
+        question="",
+        result_id="res_prev",
+        source_value=img_path,
+        peek="之前的预览",
+        text="之前的正文",
+        tags=[],
+        result_json={},
+    )
+
+    captured = {}
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+        captured["prompt"] = prompt
+        return '{"peek": "回答", "text": "细节", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(
+                db, paths=[img_path], question="金额是多少？", previous_result_id="res_prev"
+            )
+            assert result["read"] == 1
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+    p = captured["prompt"]
+    assert "之前对这张图的理解" in p
+    assert p.index("之前对这张图的理解") < p.index("JSON")  # 上下文在格式要求之前

@@ -88,3 +88,56 @@ def test_compress_over_limit_raises_too_large():
             _compress_image(img_path, target_long_edge=4096)
         # ImageTooLargeError 是 ValueError 子类，兼容旧调用方的 except ValueError
         assert issubclass(ImageTooLargeError, ValueError)
+
+
+def test_read_image_response_format_only_v4fve():
+    """json_mode=True 时仅 v4fve 附加官方 response_format，其他模型不带。"""
+    import asyncio
+
+    from tools._vl_client import read_image
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    class _Client:
+        def __init__(self):
+            self.payloads = []
+
+        async def post(self, url, headers=None, json=None):
+            self.payloads.append(json)
+            return _Resp()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        img_path = os.path.join(tmpdir, "a.png")
+        Image.new("RGB", (10, 10), (255, 0, 0)).save(img_path)
+
+        async def _run():
+            c1 = _Client()
+            await read_image(
+                img_path, "p", client=c1,
+                vl_config={"api_key": "k", "model": "deepseek-v4-flash-vision-exp", "base_url": "http://x"},
+                json_mode=True,
+            )
+            assert c1.payloads[0].get("response_format") == {"type": "json_object"}
+
+            c2 = _Client()
+            await read_image(
+                img_path, "p", client=c2,
+                vl_config={"api_key": "k", "model": "gpt-4o", "base_url": "http://x"},
+                json_mode=True,
+            )
+            assert "response_format" not in c2.payloads[0]
+
+            c3 = _Client()
+            await read_image(
+                img_path, "p", client=c3,
+                vl_config={"api_key": "k", "model": "deepseek-v4-flash-vision-exp", "base_url": "http://x"},
+                json_mode=False,
+            )
+            assert "response_format" not in c3.payloads[0]
+
+        asyncio.run(_run())

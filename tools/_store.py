@@ -244,6 +244,11 @@ class SQLiteVisionStore(VisionStore):
             best_id = None
             best_dist = max_distance + 1
             for rid, cand_phash in rows:
+                # 候选侧同样过纯色/低信息守卫：库里已落库的纯色记录（phash 趋同）
+                # 不能参与近似匹配，否则正常图片会误命中历史纯色记录
+                cbits = self._phash_popcount(cand_phash)
+                if cbits is None or cbits < 4 or cbits > 60:
+                    continue
                 d = self._phash_distance(phash, cand_phash)
                 if d is not None and d < best_dist:
                     best_id = rid

@@ -166,6 +166,46 @@ def test_find_cached_by_phash_skips_solid_color():
         os.unlink(db_path)
 
 
+def test_find_cached_by_phash_guards_candidates():
+    """候选侧守卫：库中已落库的纯色记录不能参与近似匹配。
+
+    查询图 popcount=4 恰好通过查询侧守卫，距离纯色记录仅 4（≤阈值），
+    若不过滤候选侧就会误命中。
+    """
+    db, db_path = _make_db()
+    try:
+        db.insert(
+            sha256="sha_white", filename="white.png", phash="0000000000000000",
+            model_id="m", question="", result_id="res_white",
+            source_value="/tmp/white.png", peek="s", text="t", tags=[], result_json={},
+        )
+        # "000000000000000f" popcount=4（过查询侧守卫），距全 0 记录距离=4
+        assert db.find_cached_by_phash("000000000000000f", "m", "") is None
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_find_cached_by_phash_tiebreak_prefers_newest():
+    """等距离时应取最新记录（与 find_cached 的 read_at DESC 语义一致）。"""
+    import time
+    db, db_path = _make_db()
+    try:
+        for rid in ("res_older", "res_newer"):
+            db.insert(
+                sha256=f"sha_{rid}", filename=f"{rid}.png", phash="0123456789abcdef",
+                model_id="m", question="", result_id=rid,
+                source_value=f"/tmp/{rid}.png", peek="s", text="t", tags=[], result_json={},
+            )
+            time.sleep(0.01)  # 确保 read_at 可区分
+        hit = db.find_cached_by_phash("0123456789abcdef", "m", "")
+        assert hit is not None
+        assert hit["result_id"] == "res_newer"
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
 def test_ensure_conn_reconnect_is_thread_safe():
     """close() 后重连的连接必须带 check_same_thread=False（offload 线程可用）。"""
     import threading
