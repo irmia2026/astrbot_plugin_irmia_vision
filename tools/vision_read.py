@@ -42,12 +42,14 @@ DEFAULT_PROMPT = (
 )
 
 # 结构化输出：要求模型返回 JSON（peek/text/tags），插件容错解析。
-# prompt 中必须含 "json" 字样（DeepSeek JSON Output 的官方要求）。
+# prompt 中必须含 "json" 字样（DeepSeek JSON Output 的官方要求）——用 ```json 围栏天然带上小写。
 STRUCTURED_SUFFIX_DEFAULT = (
-    "\n\n【输出格式】只输出 JSON 对象：\n"
+    "\n\n【输出格式】只输出一个 JSON 对象（json），例如：\n"
+    "```json\n"
     '{"peek": "一句话预览（不超过80字）", '
     '"text": "按上述要求组织的详细内容", '
     '"tags": ["3-6 个中文标签"]}\n'
+    "```\n"
     "不要输出 JSON 以外的任何内容。"
 )
 STRUCTURED_SUFFIX_QUESTION = (
@@ -55,10 +57,12 @@ STRUCTURED_SUFFIX_QUESTION = (
     "1. 只依据图片中可见的信息，不要推测或编造；看不清/无法确认的部分明确写「图片中无法确认」。\n"
     "2. 涉及图中文字/数字时，保留原文逐字引用，不翻译、不改写、不纠错。\n"
     "3. 回答语言用中文。\n\n"
-    "【输出格式】只输出 JSON 对象：\n"
+    "【输出格式】只输出一个 JSON 对象（json），例如：\n"
+    "```json\n"
     '{"peek": "用一句话直接回答（不超过80字）", '
     '"text": "完整回答，包含关键依据（引用的原文/数字/位置）", '
     '"tags": ["3-6 个中文标签"]}\n'
+    "```\n"
     "不要输出 JSON 以外的任何内容。"
 )
 
@@ -161,9 +165,11 @@ async def read(
             "未找到任何支持的图片文件。请确认路径存在，并且包含 png/jpg/jpeg/webp/gif/bmp 格式的图片。",
             options=["检查路径是否正确", "使用 vision_query 查看已有结果"],
         )
+    # 结构化输出：所有模型走 prompt 引导 + 容错解析；v4fve 额外由客户端附加 response_format。
+    # base/suffix 拆开组装：追问上下文要注入在 JSON 格式要求之前，否则模型最后看到的不是格式指令。
+    base_prompt = question if question else DEFAULT_PROMPT
+    prompt_suffix = STRUCTURED_SUFFIX_QUESTION if question else STRUCTURED_SUFFIX_DEFAULT
 
-    # 结构化输出：所有模型走 prompt 引导 + 容错解析；v4fve 额外由客户端附加 response_format
-    prompt = (question + STRUCTURED_SUFFIX_QUESTION) if question else (DEFAULT_PROMPT + STRUCTURED_SUFFIX_DEFAULT)
     # 不在此处拦截空链：命中缓存（此前已读过的图）不需要 VL 模型配置。
     # 只有存在未命中、需要调用模型的路径才要求 chain 非空（见 _read_one）。
     chain = resolve_provider_chain()
@@ -235,7 +241,7 @@ async def read(
                     )
                     return
 
-            final_prompt = prompt + previous_context if previous_context else prompt
+            final_prompt = base_prompt + previous_context + prompt_suffix
 
             if not chain:
                 raise ValueError(

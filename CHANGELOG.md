@@ -4,6 +4,8 @@
 
 ### 新增
 
+- **提示词 v2**：默认读图目标从「为视障人士描述」改为「为智能体提供事实性、可检索的结构化档案」——按图片类型分流描述重点（照片/截图/文档/发票/代码/UI/图表）、文字逐字原文提取、看不清明确写「看不清」；追问模式补充看图素养规则（不编造、原文引用、无法确认明说）。
+- **字段重命名 `summary` → `peek`（一句话预览）**，查询模式 `peek` → `list`（避免与字段撞名）：DB 列自动迁移（`RENAME COLUMN`，老数据保留）、VL 模型 JSON schema、query/export 输出、工具描述全链路同步；旧缓存的 `summary` 键解析兜底兼容。**注意**：导出 CSV 列名随之变化，依赖旧列名的外部脚本需适配。
 - **结构化读图结果**：读图 prompt 要求模型返回 JSON（`peek` 一句话预览/回答 + `text` 完整内容 + `tags` 内容标签），插件容错解析（容忍代码围栏与杂音，失败回退旧「首行预览」行为，读图永不因此失败）。`tags` 字段此前恒为空，现真正填充，搜索质量提升。v4fve 额外附加官方 `response_format`（DeepSeek JSON Output）。
 - **DeepSeek v4fve 官方文档适配**：接入模型为 `deepseek-v4-flash-vision-exp` 时自动触发——压缩长边 2048 → 1024（对齐其服务端 ~800×800 缩放与 384 token/张上限，上传体积省 ~75%）；新增 `detail` 配置项（low/auto/original）透传给支持 detail 的模型。
 - **phash 感知哈希近似缓存命中**：sha256 精确未命中后，自动用已落库的 phash 做近似匹配（同 model + 同 question + 同 detail，汉明距离 ≤ 5）。缩尺/重压缩的同一张图不再重复调用 VL 模型，兑现「甚至被压缩过的同图片也命中缓存」的承诺。近似命中返回 `matched_by` / `phash_distance`，且 `vision_read` 响应透传 `cached_via_phash` 计数与提示。
