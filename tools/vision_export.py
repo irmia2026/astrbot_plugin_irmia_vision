@@ -10,7 +10,7 @@ import os
 from datetime import datetime, timezone
 
 from ._store import VisionStore
-from ._helpers import proposal_reply
+from ._helpers import proposal_reply, run_sync
 
 
 async def export(
@@ -39,15 +39,15 @@ async def export(
     max_offset = max(0, offset)
 
     if recent > 0:
-        rows = db.get_recent(limit=min(recent, max_limit), offset=max_offset)
+        rows = await run_sync(db.get_recent, limit=min(recent, max_limit), offset=max_offset)
     elif query:
-        rows = db.search(query, limit=max_limit, offset=max_offset)
+        rows = await run_sync(db.search, query, limit=max_limit, offset=max_offset)
     elif filename:
-        rows = db.get_by_filename(filename, limit=max_limit, offset=max_offset)
+        rows = await run_sync(db.get_by_filename, filename, limit=max_limit, offset=max_offset)
     elif path:
-        rows = db.get_by_path(path, limit=max_limit, offset=max_offset)
+        rows = await run_sync(db.get_by_path, path, limit=max_limit, offset=max_offset)
     else:
-        rows = db.get_recent(limit=max_limit, offset=max_offset)
+        rows = await run_sync(db.get_recent, limit=max_limit, offset=max_offset)
 
     records = []
     for r in rows:

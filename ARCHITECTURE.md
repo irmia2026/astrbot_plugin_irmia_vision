@@ -44,19 +44,34 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 
 ## 缓存设计
 
-表 `image_cache` 以 `(sha256, model_id, question)` 为逻辑缓存键（内容寻址，不含文件名）：
+表 `image_cache` 以 `(sha256, model_id, question, detail)` 为逻辑缓存键（内容寻址，不含文件名）：
 
 - `sha256` 保证同内容不重复读，与文件名无关——`see_window` 的时间戳截图文件名每次不同，含 filename 会让缓存永远 miss。
 - `model_id` 换模型时重新读，避免不同模型描述差异污染；`model_id` 为空时放宽为任意模型命中。
-- `question` 同一个问题命中缓存，不同问题重新读。
+- `question` 同一个问题命中缓存，不同问题重新读（同图多问题并存为多条记录，不互相覆盖）。
+- `detail` 影响模型实际输入（从而影响输出），必须在缓存键内；`''` 与 `'auto'` 语义等价互相兼容（老记录迁移友好）。
 - `filename` 仍随记录落库，供查询/展示使用，只是不参与缓存匹配。
 
 sha256 精确未命中后，还有 phash 感知哈希近似兑底（`find_cached_by_phash`）：
-同 model + 同 question 的记录中，phash 汉明距离 ≤ 5（64bit）的最近一条视为同一图片。
+同 model + 同 question + 同 detail 的记录中，phash 汉明距离 ≤ 5（64bit）的最近一条视为同一图片。
 缩尺/重压缩后 sha256 必变但 phash 几乎不变，靠此兑现「被压缩过的同图也命中缓存」。
-近似命中的返回附带 `matched_by="phash"` 与 `phash_distance`，供调用方甄别。
+防护与透明化：
+
+- 纯色/低信息图片（phash 置 1 比特 < 4 或 > 60）跳过兑底——此类 phash 必然互相误判。
+- `see_window` 调用时 `allow_phash=False` 禁用兑底——屏幕内容时刻在变，近似命中会返回过期描述。
+- 两阶段查询：先轻列（result_id, phash）扫描候选，再取最佳一行的完整记录，避免重列全拉内存。
+- 近似命中的返回附带 `matched_by="phash"` / `phash_distance`，且 `vision_read` 响应中透传 `cached_via_phash` 计数与提示。
 
 追问模式通过 `previous_result_id` 携带上文，但只作用于与之前同一张图片（sha256 相同），避免污染多张图片。
+
+## 结构化输出
+
+读图 prompt 要求模型返回 JSON：`{"summary": "这是一张xxx图片，可以看到……", "text": "完整描述/回答", "tags": [...]}`。
+
+- `summary` 是给 agent 的一句话预期（默认读图）或对问题的一句话直接回答（追问模式），替代原先脆弱的「取首行」逻辑。
+- `tags` 字段真正填充（此前恒为 `[]`），提升 `vision_query` 搜索质量。
+- v4fve 额外附加官方 `response_format={"type":"json_object"}`（DeepSeek JSON Output）；其他模型仅靠 prompt 引导。
+- `_parse_result` 容错解析：容忍 ```json 围栏与前后杂音，解析失败回退「首行摘要」旧行为——读图永不因解析失败而失败。
 
 ## 模块职责
 

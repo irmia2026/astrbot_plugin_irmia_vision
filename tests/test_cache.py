@@ -107,6 +107,73 @@ def test_find_cached_by_phash():
         os.unlink(db_path)
 
 
+def test_detail_in_cache_key():
+    """detail 是缓存键的一部分；'' 与 'auto' 语义等价互相兼容。"""
+    db, db_path = _make_db()
+    try:
+        db.insert(
+            sha256="sha1", filename="a.png", phash="", model_id="m", question="",
+            result_id="res_low", source_value="/tmp/a.png", summary="s", text="t",
+            tags=[], result_json={}, detail="low",
+        )
+        # 同 detail → 命中
+        assert db.find_cached("sha1", "m", "", "low") is not None
+        # 不同 detail → 不命中（改配置后不会静默返回旧档位结果）
+        assert db.find_cached("sha1", "m", "", "original") is None
+        # '' 与 'auto' 等价：insert 用 ''，查询用 'auto' 也命中（老记录兼容）
+        db.insert(
+            sha256="sha2", filename="b.png", phash="", model_id="m", question="",
+            result_id="res_legacy", source_value="/tmp/b.png", summary="s", text="t",
+            tags=[], result_json={}, detail="",
+        )
+        assert db.find_cached("sha2", "m", "", "auto") is not None
+        assert db.find_cached("sha2", "m", "", "") is not None
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_find_cached_by_phash_skips_solid_color():
+    """纯色/低信息图片的 phash 趋同（全 0/全 1），近似兜底必须跳过。"""
+    db, db_path = _make_db()
+    try:
+        db.insert(
+            sha256="sha_white", filename="white.png", phash="0000000000000000",
+            model_id="m", question="", result_id="res_white",
+            source_value="/tmp/white.png", summary="s", text="t", tags=[], result_json={},
+        )
+        # 纯黑图 phash 全 0：popcount < 4 → 跳过兜底，不错误命中纯白的记录
+        assert db.find_cached_by_phash("0000000000000000", "m", "") is None
+        # 全 1（popcount 64 > 60）同样跳过
+        assert db.find_cached_by_phash("ffffffffffffffff", "m", "") is None
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_ensure_conn_reconnect_is_thread_safe():
+    """close() 后重连的连接必须带 check_same_thread=False（offload 线程可用）。"""
+    import threading
+    db, db_path = _make_db()
+    try:
+        db.close()  # _conn = None，下次调用走 _ensure_conn 重连
+        errors = []
+
+        def _worker():
+            try:
+                db.find_cached("sha_x", "m", "")
+            except Exception as e:
+                errors.append(e)
+
+        t = threading.Thread(target=_worker)
+        t.start()
+        t.join()
+        assert not errors, f"跨线程重连调用失败: {errors}"
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
 def test_get_by_result_id_and_recent():
     db, db_path = _make_db()
     try:

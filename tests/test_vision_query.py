@@ -77,7 +77,7 @@ def test_vision_query_list_returns_peek_only(tmp_path):
     assert result["mode"] == "peek"
     assert result["total"] == 1
     item = result["results"][0]
-    assert set(item.keys()) == {"result_id", "filename", "summary"}
+    assert set(item.keys()) == {"result_id", "filename", "summary", "question"}
 
 
 async def _run_query_empty(tmp_path):

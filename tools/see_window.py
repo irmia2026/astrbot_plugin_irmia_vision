@@ -197,6 +197,9 @@ async def see_window(
         question=prompt,
         force_reread=force_reread,
         previous_result_id=previous_result_id,
+        # 屏幕内容时刻在变：同一窗口代码滚动后 phash 距离仅 0-4，
+        # 近似命中会返回过期屏幕描述，see_window 禁用 phash 兜底（sha256 精确命中保留）
+        allow_phash=False,
     )
     result["screenshot_path"] = shot_path
     result["window"] = window_label

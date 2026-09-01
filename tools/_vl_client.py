@@ -12,6 +12,8 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
+from astrbot.api import logger
+
 from ._helpers import run_sync
 from .config import get_vl_model_config
 
@@ -32,13 +34,42 @@ def is_v4fve(model: str) -> bool:
     return "v4-flash-vision" in m or "v4fve" in m
 
 
+_DETAIL_ALLOWED = ("low", "auto", "original", "high")
+
+
+def normalize_detail(value) -> str:
+    """归一化 detail 配置：strip + lower + 白名单校验，非法值告警并回退 auto。
+
+    注意跨 provider 语义差异：DeepSeek 认 low/auto/original，OpenAI 认 low/high/auto，
+    非法值原样发给 API 会导致 400，必须在这里拦住。
+    """
+    v = str(value or "").strip().lower()
+    if not v:
+        return "auto"
+    if v not in _DETAIL_ALLOWED:
+        logger.warning(f"detail 配置非法: {value!r}，回退为 auto（合法值: {', '.join(_DETAIL_ALLOWED)}）")
+        return "auto"
+    return v
+
+
 def target_edge_for_model(model: str) -> int:
     """按目标模型选择压缩长边：v4fve 对齐其服务端 800×800 缩放，其余用默认。"""
     return V4FVE_LONG_EDGE if is_v4fve(model) else TARGET_LONG_EDGE
 
 
-def _compress_image(path: str, target_long_edge: int = TARGET_LONG_EDGE, quality: int = TARGET_QUALITY) -> tuple[bytes, str]:
-    """压缩图片到指定长边，返回字节和 MIME 类型。"""
+def effective_target_edge(model: str, detail: str) -> int | None:
+    """综合模型与 detail 决定压缩长边。返回 None 表示不降采样（保留原图）。
+
+    detail=original 的官方语义是「保留原图」，若客户端仍无条件压缩则名存实亡，
+    尤其是 see_window 截图读小字代码的场景。
+    """
+    if normalize_detail(detail) == "original":
+        return None
+    return target_edge_for_model(model)
+
+
+def _compress_image(path: str, target_long_edge: int | None = TARGET_LONG_EDGE, quality: int = TARGET_QUALITY) -> tuple[bytes, str]:
+    """压缩图片到指定长边，返回字节和 MIME 类型。target_long_edge=None 时不缩放。"""
     ext = Path(path).suffix.lower()
     with Image.open(path) as img:
         # 处理动画 gif 的第一帧
@@ -50,7 +81,7 @@ def _compress_image(path: str, target_long_edge: int = TARGET_LONG_EDGE, quality
             img = img.convert("RGB")
 
         w, h = img.size
-        if max(w, h) > target_long_edge:
+        if target_long_edge is not None and max(w, h) > target_long_edge:
             ratio = target_long_edge / max(w, h)
             new_size = (int(w * ratio), int(h * ratio))
             img = img.resize(new_size, Image.Resampling.LANCZOS)
@@ -84,18 +115,20 @@ def _compress_image(path: str, target_long_edge: int = TARGET_LONG_EDGE, quality
         return data, mime
 
 
-def encode_image(path: str, target_long_edge: int = TARGET_LONG_EDGE) -> str:
+def encode_image(path: str, target_long_edge: int | None = TARGET_LONG_EDGE) -> str:
     """读取图片并压缩后编码为 base64。"""
     raw, mime = _compress_image(path, target_long_edge=target_long_edge)
     return f"data:{mime};base64,{base64.b64encode(raw).decode('utf-8')}"
 
 
-async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=None, vl_config: dict | None = None) -> str:
+async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=None, vl_config: dict | None = None, json_mode: bool = False) -> str:
     """异步调用 VL 模型读取图片，返回文本结果。
 
     Args:
         vl_config: 显式传入的 VL 配置（来自 provider 降级链）。为 None 时回退到全局配置。
         client: 外部 httpx.AsyncClient 以共享连接池。
+        json_mode: 请求结构化 JSON 输出。仅对 v4fve 附加官方 response_format
+            （DeepSeek JSON Output 文档）；其他模型仅靠 prompt 引导，由调用方容错解析。
     """
     cfg = vl_config if vl_config is not None else get_vl_model_config()
     base_url = cfg.get("base_url", "https://api.openai.com/v1").rstrip("/")
@@ -106,15 +139,14 @@ async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=N
     if not api_key:
         raise ValueError("未配置 VL 模型的 api_key（vl_provider_ids 或 vl_model.api_key）")
 
+    # detail 归一化（非法值回退 auto）；original=保留原图，跳过客户端降采样。
+    detail = normalize_detail(cfg.get("detail", "auto"))
+
     # 压缩编码（PIL 解码 + 缩放 + 重编码 + base64）是 CPU/IO 密集同步操作，
     # 移出事件循环避免阻塞宿主。大小限制在 _compress_image 内对压缩结果生效。
-    # v4fve 触发官方文档适配：压缩长边 2048 → 1024（其服务端縮放到 ~800×800，
+    # v4fve 触发官方文档适配：压缩长边 2048 → 1024（其服务端缩放到 ~800×800，
     # token 上限 384/张，更大输入无收益只费带宽）。
-    image_url = await run_sync(encode_image, path, target_edge_for_model(model))
-
-    # detail 语义（v4fve 官方文档）：low=512×512 更省更快，original/auto=保留原图。
-    # 默认 auto；可在 vl_model 配置中用 "detail" 覆盖（如 see_window 场景用 original）。
-    detail = str(cfg.get("detail", "auto") or "auto")
+    image_url = await run_sync(encode_image, path, effective_target_edge(model, detail))
 
     payload = {
         "model": model,
@@ -135,6 +167,9 @@ async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=N
         ],
         "max_tokens": max_tokens,
     }
+    if json_mode and is_v4fve(model):
+        # DeepSeek JSON Output：官方保证输出合法 JSON（prompt 需含 json 字样，由调用方保证）
+        payload["response_format"] = {"type": "json_object"}
 
     headers = {
         "Authorization": f"Bearer {api_key}",

@@ -22,19 +22,20 @@ class VisionStore(ABC):
     """图片缓存存储抽象基类。"""
 
     @abstractmethod
-    def find_cached(self, sha256: str, model_id: str, question: str = "") -> dict | None:
+    def find_cached(self, sha256: str, model_id: str, question: str = "", detail: str = "") -> dict | None:
         """查询缓存，命中时返回结果并更新 hit_count。
 
         按内容寻址（sha256），与文件名无关：同一内容的图片无论文件名如何都命中，
         这对 see_window 的时间戳截图文件名至关重要。
+        detail 影响模型实际输入（从而影响输出），必须在缓存键内。
         """
         raise NotImplementedError
 
     @abstractmethod
-    def find_cached_by_phash(self, phash: str, model_id: str, question: str = "", max_distance: int = 5) -> dict | None:
+    def find_cached_by_phash(self, phash: str, model_id: str, question: str = "", detail: str = "", max_distance: int = 5) -> dict | None:
         """sha256 精确未命中后的近似兑底：按感知哈希匹配。
 
-        命中条件：同 model_id + question 的记录中，phash 汉明距离 <= max_distance
+        命中条件：同 model_id + question + detail 的记录中，phash 汉明距离 <= max_distance
         的最近一条。缩尺/重压缩的同一张图 sha256 必变，但 phash 几乎不变。
         返回字典附带 matched_by="phash" 和 phash_distance，供调用方知晓是近似命中。
         """
@@ -43,7 +44,7 @@ class VisionStore(ABC):
     @abstractmethod
     def insert(self, *, sha256: str, filename: str, phash: str, model_id: str, question: str,
                result_id: str, source_value: str, summary: str, text: str, tags: list[str],
-               result_json: dict) -> None:
+               result_json: dict, detail: str = "") -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS image_cache (
     text TEXT,
     tags TEXT,
     result_json TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
     read_at TEXT NOT NULL,
     hit_count INTEGER NOT NULL DEFAULT 0,
     last_hit_at TEXT
@@ -117,7 +119,12 @@ class SQLiteVisionStore(VisionStore):
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.executescript(SCHEMA)
-        self._conn.commit()
+        # 老库迁移：补 detail 列（已存在则忽略）
+        try:
+            self._conn.execute("ALTER TABLE image_cache ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass  # duplicate column
 
     def close(self) -> None:
         with self._lock:
@@ -127,22 +134,32 @@ class SQLiteVisionStore(VisionStore):
 
     def _ensure_conn(self):
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path, timeout=60.0)
+            # 重连必须与 __init__ 保持相同的跨线程配置，否则 offload 后炸 ProgrammingError
+            self._conn = sqlite3.connect(self.db_path, timeout=60.0, check_same_thread=False)
         return self._conn
 
-    def find_cached(self, sha256: str, model_id: str, question: str = "") -> dict | None:
+    @staticmethod
+    def _detail_clause(detail: str) -> tuple[str, tuple]:
+        """detail 匹配子句。'' 与 'auto' 语义等价（都是默认档位），互相兼容，
+        使迁移前 detail='' 的老记录仍能被 detail='auto' 的查询命中。"""
+        if detail in ("", "auto"):
+            return "detail IN ('', 'auto')", ()
+        return "detail = ?", (detail,)
+
+    def find_cached(self, sha256: str, model_id: str, question: str = "", detail: str = "") -> dict | None:
         with self._lock:
             db = self._ensure_conn()
+            dclause, dparams = self._detail_clause(detail)
             if model_id:
                 row = db.execute(
-                    "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND model_id = ? AND question = ? ORDER BY read_at DESC",
-                    (sha256, model_id, question),
+                    f"SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND model_id = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
+                    (sha256, model_id, question, *dparams),
                 ).fetchone()
             else:
                 # model_id 为空时放宽为任意模型命中（同一张图的缓存不因换配置而失效）
                 row = db.execute(
-                    "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND question = ? ORDER BY read_at DESC",
-                    (sha256, question),
+                    f"SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
+                    (sha256, question, *dparams),
                 ).fetchone()
             if row:
                 db.execute(
@@ -177,47 +194,73 @@ class SQLiteVisionStore(VisionStore):
         except ValueError:
             return None
 
-    def find_cached_by_phash(self, phash: str, model_id: str, question: str = "", max_distance: int = 5) -> dict | None:
+    @staticmethod
+    def _phash_popcount(phash: str) -> int | None:
+        """phash 的置 1 比特数；非法输入返回 None。"""
+        p = (phash or "").strip()
+        if not p:
+            return None
+        try:
+            return bin(int(p, 16)).count("1")
+        except ValueError:
+            return None
+
+    def find_cached_by_phash(self, phash: str, model_id: str, question: str = "", detail: str = "", max_distance: int = 5) -> dict | None:
         if not phash:
+            return None
+        # 纯色/低信息图片的 phash 趋同（实测白/红/蓝/灰纯色图两两距离 0-1），
+        # 参与近似匹配必然互相误判，直接跳过兑底。
+        bits = self._phash_popcount(phash)
+        if bits is None or bits < 4 or bits > 60:
             return None
         with self._lock:
             db = self._ensure_conn()
+            # 第一阶段：只取轻列（result_id, phash）扫描候选，
+            # 避免把 result_json/text 重列全拉进内存并长时间持锁
+            dclause, dparams = self._detail_clause(detail)
             if model_id:
                 rows = db.execute(
-                    "SELECT result_id, result_json, summary, text, tags, read_at, phash FROM image_cache WHERE model_id = ? AND question = ? AND phash IS NOT NULL AND phash != ''",
-                    (model_id, question),
+                    f"SELECT result_id, phash FROM image_cache WHERE model_id = ? AND question = ? AND {dclause} AND phash IS NOT NULL AND phash != ''",
+                    (model_id, question, *dparams),
                 ).fetchall()
             else:
                 # model_id 为空时放宽为任意模型命中（与 find_cached 一致）
                 rows = db.execute(
-                    "SELECT result_id, result_json, summary, text, tags, read_at, phash FROM image_cache WHERE question = ? AND phash IS NOT NULL AND phash != ''",
-                    (question,),
+                    f"SELECT result_id, phash FROM image_cache WHERE question = ? AND {dclause} AND phash IS NOT NULL AND phash != ''",
+                    (question, *dparams),
                 ).fetchall()
-            best = None
+            best_id = None
             best_dist = max_distance + 1
-            for row in rows:
-                d = self._phash_distance(phash, row[6])
+            for rid, cand_phash in rows:
+                d = self._phash_distance(phash, cand_phash)
                 if d is not None and d < best_dist:
-                    best = row
+                    best_id = rid
                     best_dist = d
-            if best is None:
+            if best_id is None:
+                return None
+            # 第二阶段：只取最佳一行的完整记录
+            row = db.execute(
+                "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE result_id = ?",
+                (best_id,),
+            ).fetchone()
+            if row is None:
                 return None
             db.execute(
                 "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
-                (datetime.now(timezone.utc).isoformat(), best[0]),
+                (datetime.now(timezone.utc).isoformat(), row[0]),
             )
             db.commit()
             hit_row = db.execute(
                 "SELECT hit_count FROM image_cache WHERE result_id = ?",
-                (best[0],),
+                (row[0],),
             ).fetchone()
             return {
-                "result_id": best[0],
-                "result_json": best[1],
-                "summary": best[2],
-                "text": best[3],
-                "tags": best[4],
-                "read_at": best[5],
+                "result_id": row[0],
+                "result_json": row[1],
+                "summary": row[2],
+                "text": row[3],
+                "tags": row[4],
+                "read_at": row[5],
                 "hit_count": hit_row[0] if hit_row else 1,
                 "matched_by": "phash",
                 "phash_distance": best_dist,
@@ -237,13 +280,14 @@ class SQLiteVisionStore(VisionStore):
         text: str,
         tags: list[str],
         result_json: dict,
+        detail: str = "",
     ) -> None:
         with self._lock:
             db = self._ensure_conn()
             db.execute(
                 """
-                INSERT INTO image_cache (sha256, filename, phash, model_id, question, result_id, source_value, summary, text, tags, result_json, read_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO image_cache (sha256, filename, phash, model_id, question, result_id, source_value, summary, text, tags, result_json, detail, read_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     sha256,
@@ -257,6 +301,7 @@ class SQLiteVisionStore(VisionStore):
                     text,
                     json.dumps(tags, ensure_ascii=False),
                     json.dumps(result_json, ensure_ascii=False),
+                    detail,
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
@@ -269,7 +314,7 @@ class SQLiteVisionStore(VisionStore):
             like = f"%{_like_escape(query)}%"
             rows = db.execute(
                 """
-                SELECT result_id, sha256, filename, source_value, summary, text, tags, read_at, hit_count
+                SELECT result_id, sha256, filename, source_value, summary, text, tags, question, read_at, hit_count
                 FROM image_cache
                 WHERE summary LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
                   OR filename LIKE ? ESCAPE '\\' OR source_value LIKE ? ESCAPE '\\'

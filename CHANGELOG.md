@@ -4,10 +4,22 @@
 
 ### 新增
 
+- **结构化读图结果**：读图 prompt 要求模型返回 JSON（`summary` 一句话预期/回答 + `text` 完整内容 + `tags` 内容标签），插件容错解析（容忍代码围栏与杂音，失败回退旧「首行摘要」行为，读图永不因此失败）。`tags` 字段此前恒为空，现真正填充，搜索质量提升。v4fve 额外附加官方 `response_format`（DeepSeek JSON Output）。
 - **DeepSeek v4fve 官方文档适配**：接入模型为 `deepseek-v4-flash-vision-exp` 时自动触发——压缩长边 2048 → 1024（对齐其服务端 ~800×800 缩放与 384 token/张上限，上传体积省 ~75%）；新增 `detail` 配置项（low/auto/original）透传给支持 detail 的模型。
-- **phash 感知哈希近似缓存命中**：sha256 精确未命中后，自动用已落库的 phash 做近似匹配（同 model + 同 question，汉明距离 ≤ 5）。缩尺/重压缩的同一张图不再重复调用 VL 模型，兑现「甚至被压缩过的同图片也命中缓存」的承诺。近似命中返回 `matched_by` / `phash_distance` 供甄别。
+- **phash 感知哈希近似缓存命中**：sha256 精确未命中后，自动用已落库的 phash 做近似匹配（同 model + 同 question + 同 detail，汉明距离 ≤ 5）。缩尺/重压缩的同一张图不再重复调用 VL 模型，兑现「甚至被压缩过的同图片也命中缓存」的承诺。近似命中返回 `matched_by` / `phash_distance`，且 `vision_read` 响应透传 `cached_via_phash` 计数与提示。
+- `vision_query` peek 模式结果新增 `question` 字段：同一张图的多条不同问题记录可区分（每个 question 独立成行，不会互相覆盖）。
 
 ### 修复
+
+- **detail 纳入缓存键**：detail 是影响模型输入（从而影响输出）的配置维度，此前改 detail 配置后同图同问题会静默命中旧档位缓存。`''` 与 `'auto'` 语义等价互相兼容，老记录不受影响。
+- **`detail=original` 不再被客户端压缩架空**：original 语义为保留原图，现跳过客户端降采样（此前 v4fve 下仍被压到 1024，see_window 读屏小字场景最受其害）。
+- **detail 配置经 provider 降级链继承**：`_provider_to_vl_config` 与 concurrency/max_retries 同一模式从全局 vl_model 继承 detail（此前走下拉框链路配 detail 不生效）。
+- **detail 枚举归一化**：strip + 小写 + 白名单校验，非法值告警并回退 auto（此前乱配会原样发给 API 导致 400；跨 provider 语义差异：OpenAI 认 high / DeepSeek 认 original）。
+- **see_window 禁用 phash 近似兜底**：实测同一 IDE 窗口代码全换后 phash 距离仅 0-4（≤5 必误判），近似命中会返回过期屏幕描述；现 see_window 走 `allow_phash=False`（sha256 精确命中保留）。
+- **纯色/低信息图片跳过 phash 兜底**：此类 phash 趋同（白/红/蓝/灰两两距离 0-1），置 1 比特 <4 或 >60 直接不匹配。
+- **phash 兜底改两阶段查询**：先轻列扫描候选再取最佳行，避免把 result_json/text 重列全拉内存并持锁。
+- **`_ensure_conn` 重连补 `check_same_thread=False`**：close 后重连的连接此前在 offload 线程调用会抛 ProgrammingError（潜伏 bug，一行排雷）。
+- **vision_query / vision_export 的 DB 调用补 offload**：与 vision_read 一致移出事件循环。
 
 - **see_window 截图缓存永远 miss**：截图文件名带微秒时间戳，而缓存键含 filename 维度，导致同一画面每次截图都重复调用 VL 模型。缓存键改为 `(sha256, model_id, question)` 纯内容寻址，与文件名无关；filename 仍落库供查询展示。
 - **20MB 大小限制误杀大图**：原检查按原始文件字节数在压缩前拦截，25MB 的照片压缩后仅 1-2MB 却被拒绝。大小检查移到 `_compress_image` 压缩结果上，不再限制原始文件；同时删除 `vision_read` 中的重复前置检查。
