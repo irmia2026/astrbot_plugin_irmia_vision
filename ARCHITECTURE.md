@@ -52,13 +52,13 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 - `detail` 影响模型实际输入（从而影响输出），必须在缓存键内；`''` 与 `'auto'` 语义等价互相兼容（老记录迁移友好）。
 - `filename` 仍随记录落库，供查询/展示使用，只是不参与缓存匹配。
 
-sha256 精确未命中后，还有 phash 感知哈希近似兑底（`find_cached_by_phash`）：
+sha256 精确未命中后，还有 phash 感知哈希近似兜底（`find_cached_by_phash`）：
 同 model + 同 question + 同 detail 的记录中，phash 汉明距离 ≤ 5（64bit）的最近一条视为同一图片。
 缩尺/重压缩后 sha256 必变但 phash 几乎不变，靠此兑现「被压缩过的同图也命中缓存」。
 防护与透明化：
 
-- 纯色/低信息图片（phash 置 1 比特 < 4 或 > 60）跳过兑底——此类 phash 必然互相误判。
-- `see_window` 调用时 `allow_phash=False` 禁用兑底——屏幕内容时刻在变，近似命中会返回过期描述。
+- 纯色/低信息图片（phash 置 1 比特 < 4 或 > 60）跳过兜底——此类 phash 必然互相误判。
+- `see_window` 调用时 `allow_phash=False` 禁用兜底——屏幕内容时刻在变，近似命中会返回过期描述。
 - 两阶段查询：先轻列（result_id, phash）扫描候选，再取最佳一行的完整记录，避免重列全拉内存。
 - 近似命中的返回附带 `matched_by="phash"` / `phash_distance`，且 `vision_read` 响应中透传 `cached_via_phash` 计数与提示。
 

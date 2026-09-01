@@ -33,7 +33,7 @@ class VisionStore(ABC):
 
     @abstractmethod
     def find_cached_by_phash(self, phash: str, model_id: str, question: str = "", detail: str = "", max_distance: int = 5) -> dict | None:
-        """sha256 精确未命中后的近似兑底：按感知哈希匹配。
+        """sha256 精确未命中后的近似兜底：按感知哈希匹配。
 
         命中条件：同 model_id + question + detail 的记录中，phash 汉明距离 <= max_distance
         的最近一条。缩尺/重压缩的同一张图 sha256 必变，但 phash 几乎不变。
@@ -209,7 +209,7 @@ class SQLiteVisionStore(VisionStore):
         if not phash:
             return None
         # 纯色/低信息图片的 phash 趋同（实测白/红/蓝/灰纯色图两两距离 0-1），
-        # 参与近似匹配必然互相误判，直接跳过兑底。
+        # 参与近似匹配必然互相误判，直接跳过兜底。
         bits = self._phash_popcount(phash)
         if bits is None or bits < 4 or bits > 60:
             return None
@@ -220,13 +220,13 @@ class SQLiteVisionStore(VisionStore):
             dclause, dparams = self._detail_clause(detail)
             if model_id:
                 rows = db.execute(
-                    f"SELECT result_id, phash FROM image_cache WHERE model_id = ? AND question = ? AND {dclause} AND phash IS NOT NULL AND phash != ''",
+                    f"SELECT result_id, phash FROM image_cache WHERE model_id = ? AND question = ? AND {dclause} AND phash IS NOT NULL AND phash != '' ORDER BY read_at DESC",
                     (model_id, question, *dparams),
                 ).fetchall()
             else:
                 # model_id 为空时放宽为任意模型命中（与 find_cached 一致）
                 rows = db.execute(
-                    f"SELECT result_id, phash FROM image_cache WHERE question = ? AND {dclause} AND phash IS NOT NULL AND phash != ''",
+                    f"SELECT result_id, phash FROM image_cache WHERE question = ? AND {dclause} AND phash IS NOT NULL AND phash != '' ORDER BY read_at DESC",
                     (question, *dparams),
                 ).fetchall()
             best_id = None
