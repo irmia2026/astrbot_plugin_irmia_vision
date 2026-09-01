@@ -85,6 +85,7 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 | `timeout` | 单次 VL 请求超时时间（秒），默认 120。 |
 | `concurrency` | 并发请求数。留空时根据 `timeout` 自适应，最高 200。 |
 | `max_retries` | 单张图失败重试次数，默认 2。 |
+| `detail` | 图片细节级别（支持 detail 的模型，如 DeepSeek v4fve）：`low` 更快更省、`auto` 自动（默认）、`original` 保留原图。 |
 
 ## 使用示例
 
@@ -156,6 +157,7 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 - 路径支持绝对路径、相对路径和 `~` 用户主目录。
 - 并发数默认根据 `timeout` 自适应，避免把慢 API 打挂。如需固定，可配置 `concurrency`。
 - 支持多模型降级：三个下拉框按优先级排列，靠前的模型失败时自动切换到下一个。全部留空则自动使用所有已保存模型。
+- DeepSeek v4fve（`deepseek-v4-flash-vision-exp`）适配：检测到该模型时压缩长边自动从 2048 降为 1024（其服务端会将图片缩放到总像素约 800×800、每张 token 上限 384，更大输入无收益只费带宽），并自动处理其推理模式的 `reasoning_content` 回退。
 
 ## 开发
 

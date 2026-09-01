@@ -4,6 +4,7 @@
 
 ### 新增
 
+- **DeepSeek v4fve 官方文档适配**：接入模型为 `deepseek-v4-flash-vision-exp` 时自动触发——压缩长边 2048 → 1024（对齐其服务端 ~800×800 缩放与 384 token/张上限，上传体积省 ~75%）；新增 `detail` 配置项（low/auto/original）透传给支持 detail 的模型。
 - **phash 感知哈希近似缓存命中**：sha256 精确未命中后，自动用已落库的 phash 做近似匹配（同 model + 同 question，汉明距离 ≤ 5）。缩尺/重压缩的同一张图不再重复调用 VL 模型，兑现「甚至被压缩过的同图片也命中缓存」的承诺。近似命中返回 `matched_by` / `phash_distance` 供甄别。
 
 ### 修复

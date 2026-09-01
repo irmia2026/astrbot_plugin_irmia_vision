@@ -19,6 +19,23 @@ MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 压缩后上传 payload 上限 20MB（不�
 TARGET_LONG_EDGE = 2048
 TARGET_QUALITY = 85
 
+# DeepSeek v4fve（deepseek-v4-flash-vision-exp）官方文档：
+# 图片在进入模型前会被自动缩放到总像素约 800×800（每张 token 上限 384，
+# 2000×2000 与 5000×5000 消耗相同）。传 2048 不会提升模型看到的细节，
+# 只浪费上传带宽；压到长边 1024 留有充足余量，上传体积可省 ~75%。
+V4FVE_LONG_EDGE = 1024
+
+
+def is_v4fve(model: str) -> bool:
+    """判断模型是否为 DeepSeek v4fve 视觉模型（deepseek-v4-flash-vision-exp）。"""
+    m = (model or "").lower()
+    return "v4-flash-vision" in m or "v4fve" in m
+
+
+def target_edge_for_model(model: str) -> int:
+    """按目标模型选择压缩长边：v4fve 对齐其服务端 800×800 缩放，其余用默认。"""
+    return V4FVE_LONG_EDGE if is_v4fve(model) else TARGET_LONG_EDGE
+
 
 def _compress_image(path: str, target_long_edge: int = TARGET_LONG_EDGE, quality: int = TARGET_QUALITY) -> tuple[bytes, str]:
     """压缩图片到指定长边，返回字节和 MIME 类型。"""
@@ -67,9 +84,9 @@ def _compress_image(path: str, target_long_edge: int = TARGET_LONG_EDGE, quality
         return data, mime
 
 
-def encode_image(path: str) -> str:
+def encode_image(path: str, target_long_edge: int = TARGET_LONG_EDGE) -> str:
     """读取图片并压缩后编码为 base64。"""
-    raw, mime = _compress_image(path)
+    raw, mime = _compress_image(path, target_long_edge=target_long_edge)
     return f"data:{mime};base64,{base64.b64encode(raw).decode('utf-8')}"
 
 
@@ -91,7 +108,13 @@ async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=N
 
     # 压缩编码（PIL 解码 + 缩放 + 重编码 + base64）是 CPU/IO 密集同步操作，
     # 移出事件循环避免阻塞宿主。大小限制在 _compress_image 内对压缩结果生效。
-    image_url = await run_sync(encode_image, path)
+    # v4fve 触发官方文档适配：压缩长边 2048 → 1024（其服务端縮放到 ~800×800，
+    # token 上限 384/张，更大输入无收益只费带宽）。
+    image_url = await run_sync(encode_image, path, target_edge_for_model(model))
+
+    # detail 语义（v4fve 官方文档）：low=512×512 更省更快，original/auto=保留原图。
+    # 默认 auto；可在 vl_model 配置中用 "detail" 覆盖（如 see_window 场景用 original）。
+    detail = str(cfg.get("detail", "auto") or "auto")
 
     payload = {
         "model": model,
@@ -104,7 +127,7 @@ async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=N
                         "type": "image_url",
                         "image_url": {
                             "url": image_url,
-                            "detail": "auto",
+                            "detail": detail,
                         },
                     },
                 ],

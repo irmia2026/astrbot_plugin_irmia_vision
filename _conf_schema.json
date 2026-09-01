@@ -66,6 +66,11 @@
             "description": "最大重试次数",
             "type": "int",
             "default": 2
+          },
+          "detail": {
+            "description": "图片细节级别（支持 detail 的模型，如 DeepSeek v4fve）：low=更快更省，auto=自动，original=保留原图",
+            "type": "string",
+            "default": "auto"
           }
         }
       }
