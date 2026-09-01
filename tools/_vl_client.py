@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import base64
 import io
-import os
 from pathlib import Path
 
 import httpx
 from PIL import Image
 
+from ._helpers import run_sync
 from .config import get_vl_model_config
 
-MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 压缩后上传 payload 上限 20MB（不限制原始文件）
 TARGET_LONG_EDGE = 2048
 TARGET_QUALITY = 85
 
@@ -59,7 +59,12 @@ def _compress_image(path: str, target_long_edge: int = TARGET_LONG_EDGE, quality
             img.save(buf, format=fmt, quality=quality)
         else:
             img.save(buf, format=fmt)
-        return buf.getvalue(), mime
+        data = buf.getvalue()
+        # 大小限制作用于压缩后的实际上传内容，而非原始文件：
+        # 一张 25MB 的照片压缩到长边 2048 后通常只有 1-2MB，完全可以正常上传。
+        if len(data) > MAX_IMAGE_SIZE:
+            raise ValueError(f"图片压缩后仍超过 20MB 上传限制: {path}")
+        return data, mime
 
 
 def encode_image(path: str) -> str:
@@ -84,11 +89,9 @@ async def read_image(path: str, prompt: str, *, max_tokens: int = 4096, client=N
     if not api_key:
         raise ValueError("未配置 VL 模型的 api_key（vl_provider_ids 或 vl_model.api_key）")
 
-    size = os.path.getsize(path)
-    if size > MAX_IMAGE_SIZE:
-        raise ValueError(f"图片超过 20MB 限制: {path}")
-
-    image_url = encode_image(path)
+    # 压缩编码（PIL 解码 + 缩放 + 重编码 + base64）是 CPU/IO 密集同步操作，
+    # 移出事件循环避免阻塞宿主。大小限制在 _compress_image 内对压缩结果生效。
+    image_url = await run_sync(encode_image, path)
 
     payload = {
         "model": model,

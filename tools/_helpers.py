@@ -46,6 +46,6 @@ def proposal_reply(
 
 
 async def run_sync(fn, *args, **kwargs):
-    """在事件循环中运行同步函数。"""
-    loop = asyncio.get_event_loop()
-    return loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
+    """把同步函数 offload 到默认线程池，避免阻塞事件循环。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))

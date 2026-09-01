@@ -17,7 +17,7 @@ def _make_db():
 def test_find_cached_and_insert():
     db, db_path = _make_db()
     try:
-        cached = db.find_cached("sha1", "a.png", "gpt-4o", "")
+        cached = db.find_cached("sha1", "gpt-4o", "")
         assert cached is None
 
         db.insert(
@@ -34,18 +34,27 @@ def test_find_cached_and_insert():
             result_json={"summary": "summary", "text": "text", "tags": ["tag1"]},
         )
 
-        cached = db.find_cached("sha1", "a.png", "gpt-4o", "")
+        cached = db.find_cached("sha1", "gpt-4o", "")
         assert cached is not None
         assert cached["result_id"] == "res_001"
         assert cached["hit_count"] == 1
 
-        # 不同 filename 不应命中
-        cached2 = db.find_cached("sha1", "b.png", "gpt-4o", "")
-        assert cached2 is None
+        # 缓存按内容寻址（sha256），不含 filename 维度：
+        # 同内容不同文件名（如 see_window 的时间戳截图）也应命中
+        cached2 = db.find_cached("sha1", "gpt-4o", "")
+        assert cached2 is not None
 
         # 不同 question 不应命中
-        cached3 = db.find_cached("sha1", "a.png", "gpt-4o", "question")
+        cached3 = db.find_cached("sha1", "gpt-4o", "question")
         assert cached3 is None
+
+        # 不同 model_id 不应命中
+        cached4 = db.find_cached("sha1", "other-model", "")
+        assert cached4 is None
+
+        # model_id 为空时放宽为任意模型命中
+        cached5 = db.find_cached("sha1", "", "")
+        assert cached5 is not None
     finally:
         db.close()
         os.unlink(db_path)

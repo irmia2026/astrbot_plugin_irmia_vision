@@ -12,9 +12,9 @@ from pathlib import Path
 from astrbot.api import logger
 from PIL import Image
 
-from ._helpers import proposal_reply
+from ._helpers import proposal_reply, run_sync
 from ._store import VisionStore
-from ._vl_client import MAX_IMAGE_SIZE, read_image as vl_read_image
+from ._vl_client import read_image as vl_read_image
 from .config import resolve_provider_chain
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -27,12 +27,6 @@ DEFAULT_PROMPT = (
     "严格基于可见内容进行描述，不要猜测。"
     "最后用 2-3 句话总结图片的主题或隐含叙事。"
 )
-
-
-def _check_image_size(path: str) -> None:
-    size = os.path.getsize(path)
-    if size > MAX_IMAGE_SIZE:
-        raise ValueError(f"图片 {path} 大小超过 20MB 限制")
 
 
 def _collect_image_paths(paths: list[str]) -> list[str]:
@@ -117,7 +111,7 @@ async def read(
 
     previous_result = None
     if previous_result_id:
-        previous_result = db.get_by_result_id(previous_result_id)
+        previous_result = await run_sync(db.get_by_result_id, previous_result_id)
 
     cached_count = 0
     read_count = 0
@@ -136,7 +130,8 @@ async def read(
 
         try:
             filename = os.path.basename(path)
-            sha256 = db.sha256_of_file(path)
+            # sha256 / phash / SQLite 均为同步 I/O，offload 到线程池避免阻塞事件循环
+            sha256 = await run_sync(db.sha256_of_file, path)
 
             is_follow_up = False
             previous_context = ""
@@ -150,13 +145,13 @@ async def read(
 
             cached = None
             if not is_follow_up and not force_reread:
-                cached = db.find_cached(sha256, filename, (primary or {}).get("model", ""), question)
+                # 缓存按内容寻址（sha256），不含文件名：see_window 的时间戳截图也能命中
+                cached = await run_sync(db.find_cached, sha256, (primary or {}).get("model", ""), question)
             if cached:
                 cached_count += 1
                 return
 
-            _check_image_size(path)
-            phash = _compute_phash(path)
+            phash = await run_sync(_compute_phash, path)
             final_prompt = prompt + previous_context if previous_context else prompt
 
             if not chain:
@@ -198,7 +193,8 @@ async def read(
             parsed = _parse_result(raw)
             result_id = f"res_{uuid.uuid4().hex[:12]}"
 
-            db.insert(
+            await run_sync(
+                db.insert,
                 sha256=sha256,
                 filename=filename,
                 phash=phash,
