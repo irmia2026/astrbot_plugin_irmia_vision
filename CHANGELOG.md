@@ -1,5 +1,13 @@
 # 更新日志
 
+## 1.0.6
+
+### 修复
+
+- **see_window 截图缓存永远 miss**：截图文件名带微秒时间戳，而缓存键含 filename 维度，导致同一画面每次截图都重复调用 VL 模型。缓存键改为 `(sha256, model_id, question)` 纯内容寻址，与文件名无关；filename 仍落库供查询展示。
+- **20MB 大小限制误杀大图**：原检查按原始文件字节数在压缩前拦截，25MB 的照片压缩后仅 1-2MB 却被拒绝。大小检查移到 `_compress_image` 压缩结果上，不再限制原始文件；同时删除 `vision_read` 中的重复前置检查。
+- **批量读图冻结 AstrBot 事件循环**：`sha256_of_file` / `find_cached` / `insert` / `get_by_result_id` / `_compute_phash` 及 VL 调用内的 `encode_image` 全部是事件循环上的同步 I/O，实测 100 张图造成 5.6 秒连续冻结。现统一通过 `run_sync()` offload 到线程池（同步修复 `run_sync` 弃用的 `get_event_loop` 并真正启用它），同场景最长停滞降至 ~17ms。`SQLiteVisionStore` 相应增加 `threading.RLock` 串行化跨线程访问。
+
 ## 1.0.5
 
 ### 新增

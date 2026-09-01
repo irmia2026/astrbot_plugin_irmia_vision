@@ -44,12 +44,12 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 
 ## 缓存设计
 
-表 `image_cache` 以 `(sha256, filename, model_id, question)` 为逻辑缓存键：
+表 `image_cache` 以 `(sha256, model_id, question)` 为逻辑缓存键（内容寻址，不含文件名）：
 
-- `sha256` 保证同内容不重复读。
-- `filename` 保证同内容不同文件名可分别缓存（对文件分类场景重要）。
-- `model_id` 换模型时重新读，避免不同模型描述差异污染。
+- `sha256` 保证同内容不重复读，与文件名无关——`see_window` 的时间戳截图文件名每次不同，含 filename 会让缓存永远 miss。
+- `model_id` 换模型时重新读，避免不同模型描述差异污染；`model_id` 为空时放宽为任意模型命中。
 - `question` 同一个问题命中缓存，不同问题重新读。
+- `filename` 仍随记录落库，供查询/展示使用，只是不参与缓存匹配。
 
 追问模式通过 `previous_result_id` 携带上文，但只作用于与之前同一张图片（sha256 相同），避免污染多张图片。
 
@@ -100,7 +100,7 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 
 ## 关键约定
 
-- 只处理 `png/jpg/jpeg/webp/gif/bmp`，单张最大 20MB。
+- 只处理 `png/jpg/jpeg/webp/gif/bmp`，压缩后 payload 最大 20MB（不限制原始文件大小）。
 - `vision_read` 不返回详细内容，强制 LLM 走 `vision_query`。
 - 路径支持绝对路径、相对路径、`~` 用户主目录。
 - 数据库默认放在 AstrBot 数据目录；取不到时 fallback 到插件目录。
