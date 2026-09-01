@@ -39,10 +39,25 @@ def test_find_cached_and_insert():
         assert cached["result_id"] == "res_001"
         assert cached["hit_count"] == 1
 
-        # 缓存按内容寻址（sha256），不含 filename 维度：
-        # 同内容不同文件名（如 see_window 的时间戳截图）也应命中
+        # 缓存按内容寻址（sha256），lookup 不涉及文件名：
+        # 记录即便是在另一个文件名下落库的（如 see_window 时间戳截图），同内容也命中；
+        # 多条同 sha 记录时取最新一条（ORDER BY read_at DESC）
+        db.insert(
+            sha256="sha1",
+            filename="see_window_20260901_999999.png",
+            phash="phash1",
+            model_id="gpt-4o",
+            question="",
+            result_id="res_002",
+            source_value="/tmp/see_window_20260901_999999.png",
+            summary="summary2",
+            text="text2",
+            tags=["tag2"],
+            result_json={},
+        )
         cached2 = db.find_cached("sha1", "gpt-4o", "")
         assert cached2 is not None
+        assert cached2["result_id"] == "res_002"
 
         # 不同 question 不应命中
         cached3 = db.find_cached("sha1", "gpt-4o", "question")
@@ -169,6 +184,9 @@ def test_ensure_conn_reconnect_is_thread_safe():
         t.start()
         t.join()
         assert not errors, f"跨线程重连调用失败: {errors}"
+        # 重连后 PRAGMA 也必须完整重放（synchronous=NORMAL → 1, busy_timeout=30000）
+        assert db._conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+        assert db._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
     finally:
         db.close()
         os.unlink(db_path)

@@ -7,9 +7,13 @@ import tempfile
 
 from PIL import Image
 
+import pytest
+
 from tools._vl_client import (
     TARGET_LONG_EDGE,
     V4FVE_LONG_EDGE,
+    ImageTooLargeError,
+    _compress_image,
     effective_target_edge,
     encode_image,
     is_v4fve,
@@ -72,3 +76,15 @@ def test_encode_image_v4fve_smaller_payload():
         v4fve_bytes = len(base64.b64decode(v4fve_url.split(",", 1)[1]))
 
         assert v4fve_bytes < default_bytes * 0.6  # 至少省 40%（典型场景 ~75%）
+
+
+def test_compress_over_limit_raises_too_large():
+    """压缩后仍超 20MB 时抛 ImageTooLargeError（调用方不重试不降级的依据）。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        img_path = os.path.join(tmpdir, "huge.png")
+        # 4096×4096 纯噪声 PNG 不可压缩，payload > 20MB
+        Image.frombytes("RGB", (4096, 4096), os.urandom(4096 * 4096 * 3)).save(img_path)
+        with pytest.raises(ImageTooLargeError):
+            _compress_image(img_path, target_long_edge=4096)
+        # ImageTooLargeError 是 ValueError 子类，兼容旧调用方的 except ValueError
+        assert issubclass(ImageTooLargeError, ValueError)

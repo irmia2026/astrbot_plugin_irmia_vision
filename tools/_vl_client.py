@@ -18,6 +18,10 @@ from ._helpers import run_sync
 from .config import get_vl_model_config
 
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 压缩后上传 payload 上限 20MB（不限制原始文件）
+
+
+class ImageTooLargeError(ValueError):
+    """压缩后仍超过上传限制。调用方不应重试或降级——结果不会变。"""
 TARGET_LONG_EDGE = 2048
 TARGET_QUALITY = 85
 
@@ -111,7 +115,7 @@ def _compress_image(path: str, target_long_edge: int | None = TARGET_LONG_EDGE, 
         # 大小限制作用于压缩后的实际上传内容，而非原始文件：
         # 一张 25MB 的照片压缩到长边 2048 后通常只有 1-2MB，完全可以正常上传。
         if len(data) > MAX_IMAGE_SIZE:
-            raise ValueError(f"图片压缩后仍超过 20MB 上传限制: {path}")
+            raise ImageTooLargeError(f"图片压缩后仍超过 20MB 上传限制: {path}")
         return data, mime
 
 

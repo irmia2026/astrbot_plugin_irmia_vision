@@ -16,7 +16,7 @@ from PIL import Image
 
 from ._helpers import proposal_reply, run_sync
 from ._store import VisionStore
-from ._vl_client import normalize_detail, read_image as vl_read_image
+from ._vl_client import ImageTooLargeError, normalize_detail, read_image as vl_read_image
 from .config import resolve_provider_chain
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -241,6 +241,8 @@ async def read(
                             used_model = vl_cfg.get("model", "unknown")
                             used_detail = normalize_detail(vl_cfg.get("detail", "auto"))
                             break
+                        except ImageTooLargeError:
+                            raise  # 压缩后仍超限：重试/降级结果都一样，直接失败不放大
                         except Exception as e:
                             last_err = e
                     if last_err is None:

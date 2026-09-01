@@ -114,17 +114,25 @@ class SQLiteVisionStore(VisionStore):
         # 单个 sqlite3 连接跨线程共享时必须串行化。
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-        self._conn = sqlite3.connect(db_path, timeout=60.0, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute("PRAGMA busy_timeout=30000")
-        self._conn.executescript(SCHEMA)
+        self._conn = self._connect()
+
+    def _connect(self):
+        """建立连接并完整初始化（PRAGMA / SCHEMA / 迁移）。
+
+        __init__ 与 close 后重连共用，保证重连不丢任何配置。
+        """
+        conn = sqlite3.connect(self.db_path, timeout=60.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.executescript(SCHEMA)
         # 老库迁移：补 detail 列（已存在则忽略）
         try:
-            self._conn.execute("ALTER TABLE image_cache ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
-            self._conn.commit()
+            conn.execute("ALTER TABLE image_cache ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
+            conn.commit()
         except sqlite3.OperationalError:
             pass  # duplicate column
+        return conn
 
     def close(self) -> None:
         with self._lock:
@@ -134,8 +142,7 @@ class SQLiteVisionStore(VisionStore):
 
     def _ensure_conn(self):
         if self._conn is None:
-            # 重连必须与 __init__ 保持相同的跨线程配置，否则 offload 后炸 ProgrammingError
-            self._conn = sqlite3.connect(self.db_path, timeout=60.0, check_same_thread=False)
+            self._conn = self._connect()
         return self._conn
 
     @staticmethod

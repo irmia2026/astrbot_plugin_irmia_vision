@@ -18,8 +18,10 @@
 - **see_window 禁用 phash 近似兜底**：实测同一 IDE 窗口代码全换后 phash 距离仅 0-4（≤5 必误判），近似命中会返回过期屏幕描述；现 see_window 走 `allow_phash=False`（sha256 精确命中保留）。
 - **纯色/低信息图片跳过 phash 兜底**：此类 phash 趋同（白/红/蓝/灰两两距离 0-1），置 1 比特 <4 或 >60 直接不匹配。
 - **phash 兜底改两阶段查询**：先轻列扫描候选再取最佳行，避免把 result_json/text 重列全拉内存并持锁。
-- **`_ensure_conn` 重连补 `check_same_thread=False`**：close 后重连的连接此前在 offload 线程调用会抛 ProgrammingError（潜伏 bug，一行排雷）。
+- **`_ensure_conn` 重连补全初始化**：close 后重连不再丢失 `check_same_thread=False`、PRAGMA（synchronous/busy_timeout）与 SCHEMA/迁移——统一走 `_connect()` 复用（此前潜伏的跨线程 ProgrammingError 排雷）。
 - **vision_query / vision_export 的 DB 调用补 offload**：与 vision_read 一致移出事件循环。
+- **压缩后超限的错误不再重试/降级**：新增 `ImageTooLargeError`（ValueError 子类），超限即直接失败——此前会在全链路上重试 (retries+1)×链长 次且每次重新压缩。
+- **插件专用线程池**：`run_sync` 从共享默认 executor 改为 `irmia_vision` 命名线程池（≤8 线程），批量读图不再饿死宿主的其他 offload 任务。
 
 - **see_window 截图缓存永远 miss**：截图文件名带微秒时间戳，而缓存键含 filename 维度，导致同一画面每次截图都重复调用 VL 模型。缓存键改为 `(sha256, model_id, question)` 纯内容寻址，与文件名无关；filename 仍落库供查询展示。
 - **20MB 大小限制误杀大图**：原检查按原始文件字节数在压缩前拦截，25MB 的照片压缩后仅 1-2MB 却被拒绝。大小检查移到 `_compress_image` 压缩结果上，不再限制原始文件；同时删除 `vision_read` 中的重复前置检查。
