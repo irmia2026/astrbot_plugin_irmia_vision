@@ -64,7 +64,7 @@ async def export(
                 "filename": r.get("filename", ""),
                 "path": r.get("source_value", ""),
                 "sha256": r.get("sha256", ""),
-                "summary": r.get("summary", ""),
+                "peek": r.get("peek", "") or r.get("summary", ""),
                 "text": r.get("text", ""),
                 "tags": tags,
                 "model_id": r.get("model_id", ""),

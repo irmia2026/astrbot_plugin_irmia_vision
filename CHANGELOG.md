@@ -4,10 +4,10 @@
 
 ### 新增
 
-- **结构化读图结果**：读图 prompt 要求模型返回 JSON（`summary` 一句话预期/回答 + `text` 完整内容 + `tags` 内容标签），插件容错解析（容忍代码围栏与杂音，失败回退旧「首行摘要」行为，读图永不因此失败）。`tags` 字段此前恒为空，现真正填充，搜索质量提升。v4fve 额外附加官方 `response_format`（DeepSeek JSON Output）。
+- **结构化读图结果**：读图 prompt 要求模型返回 JSON（`peek` 一句话预览/回答 + `text` 完整内容 + `tags` 内容标签），插件容错解析（容忍代码围栏与杂音，失败回退旧「首行预览」行为，读图永不因此失败）。`tags` 字段此前恒为空，现真正填充，搜索质量提升。v4fve 额外附加官方 `response_format`（DeepSeek JSON Output）。
 - **DeepSeek v4fve 官方文档适配**：接入模型为 `deepseek-v4-flash-vision-exp` 时自动触发——压缩长边 2048 → 1024（对齐其服务端 ~800×800 缩放与 384 token/张上限，上传体积省 ~75%）；新增 `detail` 配置项（low/auto/original）透传给支持 detail 的模型。
 - **phash 感知哈希近似缓存命中**：sha256 精确未命中后，自动用已落库的 phash 做近似匹配（同 model + 同 question + 同 detail，汉明距离 ≤ 5）。缩尺/重压缩的同一张图不再重复调用 VL 模型，兑现「甚至被压缩过的同图片也命中缓存」的承诺。近似命中返回 `matched_by` / `phash_distance`，且 `vision_read` 响应透传 `cached_via_phash` 计数与提示。
-- `vision_query` peek 模式结果新增 `question` 字段：同一张图的多条不同问题记录可区分（每个 question 独立成行，不会互相覆盖）。
+- `vision_query` list 模式结果新增 `question` 字段：同一张图的多条不同问题记录可区分（每个 question 独立成行，不会互相覆盖）。
 
 ### 修复
 

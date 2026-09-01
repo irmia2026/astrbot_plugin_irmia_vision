@@ -35,39 +35,48 @@ def test_collect_image_paths():
 def test_parse_result():
     raw = "第一行摘要\n第二行细节\n第三行文字"
     parsed = _parse_result(raw)
-    assert parsed["summary"] == "第一行摘要"
+    assert parsed["peek"] == "第一行摘要"
     assert parsed["text"] == raw
     assert parsed["tags"] == []
 
 
 def test_parse_result_structured_json():
-    raw = '{"summary": "这是一张发票图片，可以看到金额 100 元", "text": "完整描述……", "tags": ["发票", "文档"]}'
+    raw = '{"peek": "这是一张发票图片，可以看到金额 100 元", "text": "完整描述……", "tags": ["发票", "文档"]}'
     parsed = _parse_result(raw)
-    assert parsed["summary"] == "这是一张发票图片，可以看到金额 100 元"
+    assert parsed["peek"] == "这是一张发票图片，可以看到金额 100 元"
     assert parsed["text"] == "完整描述……"
     assert parsed["tags"] == ["发票", "文档"]
 
 
 def test_parse_result_fenced_json():
-    raw = '好的，这是结果：\n```json\n{"summary": "这是一张截图", "text": "细节", "tags": ["截图"]}\n```'
+    raw = '好的，这是结果：\n```json\n{"peek": "这是一张截图", "text": "细节", "tags": ["截图"]}\n```'
     parsed = _parse_result(raw)
-    assert parsed["summary"] == "这是一张截图"
+    assert parsed["peek"] == "这是一张截图"
     assert parsed["text"] == "细节"
     assert parsed["tags"] == ["截图"]
 
 
 def test_parse_result_broken_json_fallback():
-    raw = '这是描述：{"summary": "broken'
+    raw = '这是描述：{"peek": "broken'
     parsed = _parse_result(raw)
-    assert parsed["summary"].startswith("这是描述")  # 回退首行摘要
+    assert parsed["peek"].startswith("这是描述")  # 回退首行预览
     assert parsed["tags"] == []
 
 
 def test_parse_result_json_missing_fields():
-    raw = '{"text": "只有正文没有摘要"}'
+    raw = '{"text": "只有正文没有预览"}'
     parsed = _parse_result(raw)
-    assert parsed["text"] == "只有正文没有摘要"
-    assert parsed["summary"] == "只有正文没有摘要"
+    assert parsed["text"] == "只有正文没有预览"
+    assert parsed["peek"] == "只有正文没有预览"
+
+
+def test_parse_result_legacy_summary_key():
+    """旧模型输出的 summary 字段名仍能解析（peek 优先、summary 兜底）。"""
+    raw = '{"summary": "老格式预览", "text": "正文", "tags": ["旧标签"]}'
+    parsed = _parse_result(raw)
+    assert parsed["peek"] == "老格式预览"
+    assert parsed["text"] == "正文"
+    assert parsed["tags"] == ["旧标签"]
 
 
 async def _run_vision_read_hits_cache(tmp_path):
@@ -101,7 +110,7 @@ async def _run_vision_read_hits_cache(tmp_path):
         question="",
         result_id="res_cached",
         source_value=str(img),
-        summary="预设摘要",
+        peek="预设预览",
         text="预设文字",
         tags=[],
         result_json={},
@@ -202,7 +211,7 @@ def _make_test_image(path, size=(800, 600)):
 
 
 def test_structured_read_populates_tags(tmp_path):
-    """mock VL 返回结构化 JSON → summary 取字段、tags 真正落库。"""
+    """mock VL 返回结构化 JSON → peek 取字段、tags 真正落库。"""
     from tools import vision_read
 
     db, db_path = _setup_fake_vl(tmp_path)
@@ -213,7 +222,7 @@ def test_structured_read_populates_tags(tmp_path):
 
     async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
         assert "json" in prompt.lower()  # 结构化 prompt 必须含 json 字样
-        return '{"summary": "这是一张测试图片，可以看到红蓝图形", "text": "完整描述", "tags": ["测试", "图形"]}'
+        return '{"peek": "这是一张测试图片，可以看到红蓝图形", "text": "完整描述", "tags": ["测试", "图形"]}'
 
     async def _run():
         vision_read.vl_read_image = fake_vl
@@ -223,7 +232,7 @@ def test_structured_read_populates_tags(tmp_path):
             assert result["read"] == 1
             rid = result["next_call"]["arguments"]["result_id"]
             row = db.get_by_result_id(rid)
-            assert row["summary"] == "这是一张测试图片，可以看到红蓝图形"
+            assert row["peek"] == "这是一张测试图片，可以看到红蓝图形"
             import json as _json
             assert _json.loads(row["tags"]) == ["测试", "图形"]
         finally:
@@ -247,7 +256,7 @@ def test_allow_phash_false_disables_fallback(tmp_path):
 
     async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
         calls.append(path)
-        return '{"summary": "描述", "text": "细节", "tags": []}'
+        return '{"peek": "描述", "text": "细节", "tags": []}'
 
     async def _run():
         vision_read.vl_read_image = fake_vl

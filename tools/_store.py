@@ -43,7 +43,7 @@ class VisionStore(ABC):
 
     @abstractmethod
     def insert(self, *, sha256: str, filename: str, phash: str, model_id: str, question: str,
-               result_id: str, source_value: str, summary: str, text: str, tags: list[str],
+               result_id: str, source_value: str, peek: str, text: str, tags: list[str],
                result_json: dict, detail: str = "") -> None:
         raise NotImplementedError
 
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS image_cache (
     question TEXT NOT NULL DEFAULT '',
     result_id TEXT PRIMARY KEY,
     source_value TEXT,
-    summary TEXT,
+    peek TEXT,
     text TEXT,
     tags TEXT,
     result_json TEXT NOT NULL,
@@ -126,12 +126,17 @@ class SQLiteVisionStore(VisionStore):
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=30000")
         conn.executescript(SCHEMA)
-        # 老库迁移：补 detail 列（已存在则忽略）
+        # 老库迁移：补 detail 列（已存在则忽略）；summary 列重命名为 peek
         try:
             conn.execute("ALTER TABLE image_cache ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
             conn.commit()
         except sqlite3.OperationalError:
             pass  # duplicate column
+        try:
+            conn.execute("ALTER TABLE image_cache RENAME COLUMN summary TO peek")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 新库无 summary 列
         return conn
 
     def close(self) -> None:
@@ -159,13 +164,13 @@ class SQLiteVisionStore(VisionStore):
             dclause, dparams = self._detail_clause(detail)
             if model_id:
                 row = db.execute(
-                    f"SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND model_id = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
+                    f"SELECT result_id, result_json, peek, text, tags, read_at FROM image_cache WHERE sha256 = ? AND model_id = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
                     (sha256, model_id, question, *dparams),
                 ).fetchone()
             else:
                 # model_id 为空时放宽为任意模型命中（同一张图的缓存不因换配置而失效）
                 row = db.execute(
-                    f"SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE sha256 = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
+                    f"SELECT result_id, result_json, peek, text, tags, read_at FROM image_cache WHERE sha256 = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
                     (sha256, question, *dparams),
                 ).fetchone()
             if row:
@@ -181,7 +186,7 @@ class SQLiteVisionStore(VisionStore):
                 return {
                     "result_id": row[0],
                     "result_json": row[1],
-                    "summary": row[2],
+                    "peek": row[2],
                     "text": row[3],
                     "tags": row[4],
                     "read_at": row[5],
@@ -247,7 +252,7 @@ class SQLiteVisionStore(VisionStore):
                 return None
             # 第二阶段：只取最佳一行的完整记录
             row = db.execute(
-                "SELECT result_id, result_json, summary, text, tags, read_at FROM image_cache WHERE result_id = ?",
+                "SELECT result_id, result_json, peek, text, tags, read_at FROM image_cache WHERE result_id = ?",
                 (best_id,),
             ).fetchone()
             if row is None:
@@ -264,7 +269,7 @@ class SQLiteVisionStore(VisionStore):
             return {
                 "result_id": row[0],
                 "result_json": row[1],
-                "summary": row[2],
+                "peek": row[2],
                 "text": row[3],
                 "tags": row[4],
                 "read_at": row[5],
@@ -283,7 +288,7 @@ class SQLiteVisionStore(VisionStore):
         question: str,
         result_id: str,
         source_value: str,
-        summary: str,
+        peek: str,
         text: str,
         tags: list[str],
         result_json: dict,
@@ -293,7 +298,7 @@ class SQLiteVisionStore(VisionStore):
             db = self._ensure_conn()
             db.execute(
                 """
-                INSERT INTO image_cache (sha256, filename, phash, model_id, question, result_id, source_value, summary, text, tags, result_json, detail, read_at)
+                INSERT INTO image_cache (sha256, filename, phash, model_id, question, result_id, source_value, peek, text, tags, result_json, detail, read_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -304,7 +309,7 @@ class SQLiteVisionStore(VisionStore):
                     question,
                     result_id,
                     source_value,
-                    summary,
+                    peek,
                     text,
                     json.dumps(tags, ensure_ascii=False),
                     json.dumps(result_json, ensure_ascii=False),
@@ -321,9 +326,9 @@ class SQLiteVisionStore(VisionStore):
             like = f"%{_like_escape(query)}%"
             rows = db.execute(
                 """
-                SELECT result_id, sha256, filename, source_value, summary, text, tags, question, read_at, hit_count
+                SELECT result_id, sha256, filename, source_value, peek, text, tags, question, read_at, hit_count
                 FROM image_cache
-                WHERE summary LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
+                WHERE peek LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
                   OR filename LIKE ? ESCAPE '\\' OR source_value LIKE ? ESCAPE '\\'
                 ORDER BY hit_count DESC, read_at DESC
                 LIMIT ? OFFSET ?

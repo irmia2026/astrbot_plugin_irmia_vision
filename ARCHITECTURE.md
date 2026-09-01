@@ -9,7 +9,7 @@
 四个工具，差分明显：
 
 - `vision_read`：读图并落库，只返回摘要，不返回每张图的详细内容。
-- `vision_query`：查询已落库的结果。列表查询返回轻量摘要（peek 模式），`result_id` 精确查询返回完整信息（full 模式）。
+- `vision_query`：查询已落库的结果。列表查询返回轻量列表（list 模式，每行含 `peek` 一句话预览），`result_id` 精确查询返回完整信息（full 模式）。
 - `vision_export`：把符合条件的结果导出为 JSON/CSV 文件，方便外部脚本批量处理。
 - `see_window`：截取整个屏幕或指定窗口画面，用 VL 模型分析（默认提示词偏向判断用户在干什么），仅支持 Windows。
 
@@ -26,7 +26,7 @@ LLM 调用 vision_read(paths=[...])
   │ 是 → 跳过 VL 调用，命中数 +1
   │ 否  ▼
   │ 调用用户配置的 VL 模型
-  │ 解析结果（summary / text / tags）
+  │ 解析结果（peek / text / tags）
   │ 写入 SQLite 缓存
   │
   ▼
@@ -36,7 +36,7 @@ LLM 调用 vision_read(paths=[...])
 LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
   │
   ▼
-返回 peek/full 模式的结果列表
+返回 list/full 模式的结果列表
   │
   ▼
 如需批量处理大量结果，调用 vision_export 导出 JSON/CSV 文件
@@ -66,9 +66,9 @@ sha256 精确未命中后，还有 phash 感知哈希近似兜底（`find_cached
 
 ## 结构化输出
 
-读图 prompt 要求模型返回 JSON：`{"summary": "这是一张xxx图片，可以看到……", "text": "完整描述/回答", "tags": [...]}`。
+读图 prompt 要求模型返回 JSON：`{"peek": "一句话预览（图片类型+主要内容+关键信息）", "text": "完整描述/回答", "tags": [...]}`。
 
-- `summary` 是给 agent 的一句话预期（默认读图）或对问题的一句话直接回答（追问模式），替代原先脆弱的「取首行」逻辑。
+- `peek` 是给 agent 的一句话预览（默认读图）或对问题的一句话直接回答（追问模式），替代原先脆弱的「取首行」逻辑。
 - `tags` 字段真正填充（此前恒为 `[]`），提升 `vision_query` 搜索质量。
 - v4fve 额外附加官方 `response_format={"type":"json_object"}`（DeepSeek JSON Output）；其他模型仅靠 prompt 引导。
 - `_parse_result` 容错解析：容忍 ```json 围栏与前后杂音，解析失败回退「首行摘要」旧行为——读图永不因解析失败而失败。
@@ -80,7 +80,7 @@ sha256 精确未命中后，还有 phash 感知哈希近似兜底（`find_cached
 | `main.py` | 插件入口：加载配置、从 AstrBot context 读取已保存模型列表、初始化数据库、注册工具 |
 | `tools/_registry.py` | 工厂函数 `make_tool`，注册四个工具实例 |
 | `tools/vision_read.py` | 扫描路径、缓存判断、调用 VL、落库、返回摘要 |
-| `tools/vision_query.py` | 按多种条件查询缓存结果，支持 peek/full 模式 |
+| `tools/vision_query.py` | 按多种条件查询缓存结果，支持 list/full 模式 |
 | `tools/vision_export.py` | 批量导出已读图结果为 JSON/CSV，方便外部脚本处理 |
 | `tools/see_window.py` | Windows 屏幕/窗口截图分析（win32gui 枚举窗口 + PIL 截图），复用 vision_read 读图管线 |
 | `tools/_store.py` | 存储抽象层：定义 `VisionStore` 基类，默认 `SQLiteVisionStore` |

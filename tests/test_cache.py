@@ -28,10 +28,10 @@ def test_find_cached_and_insert():
             question="",
             result_id="res_001",
             source_value="/tmp/a.png",
-            summary="summary",
+            peek="peek-summary",
             text="text",
             tags=["tag1"],
-            result_json={"summary": "summary", "text": "text", "tags": ["tag1"]},
+            result_json={"peek": "peek-summary", "text": "text", "tags": ["tag1"]},
         )
 
         cached = db.find_cached("sha1", "gpt-4o", "")
@@ -50,7 +50,7 @@ def test_find_cached_and_insert():
             question="",
             result_id="res_002",
             source_value="/tmp/see_window_20260901_999999.png",
-            summary="summary2",
+            peek="peek2",
             text="text2",
             tags=["tag2"],
             result_json={},
@@ -86,7 +86,7 @@ def test_find_cached_by_phash():
             question="",
             result_id="res_phash",
             source_value="/tmp/a.png",
-            summary="s",
+            peek="s",
             text="t",
             tags=[],
             result_json={},
@@ -128,7 +128,7 @@ def test_detail_in_cache_key():
     try:
         db.insert(
             sha256="sha1", filename="a.png", phash="", model_id="m", question="",
-            result_id="res_low", source_value="/tmp/a.png", summary="s", text="t",
+            result_id="res_low", source_value="/tmp/a.png", peek="s", text="t",
             tags=[], result_json={}, detail="low",
         )
         # 同 detail → 命中
@@ -138,7 +138,7 @@ def test_detail_in_cache_key():
         # '' 与 'auto' 等价：insert 用 ''，查询用 'auto' 也命中（老记录兼容）
         db.insert(
             sha256="sha2", filename="b.png", phash="", model_id="m", question="",
-            result_id="res_legacy", source_value="/tmp/b.png", summary="s", text="t",
+            result_id="res_legacy", source_value="/tmp/b.png", peek="s", text="t",
             tags=[], result_json={}, detail="",
         )
         assert db.find_cached("sha2", "m", "", "auto") is not None
@@ -155,7 +155,7 @@ def test_find_cached_by_phash_skips_solid_color():
         db.insert(
             sha256="sha_white", filename="white.png", phash="0000000000000000",
             model_id="m", question="", result_id="res_white",
-            source_value="/tmp/white.png", summary="s", text="t", tags=[], result_json={},
+            source_value="/tmp/white.png", peek="s", text="t", tags=[], result_json={},
         )
         # 纯黑图 phash 全 0：popcount < 4 → 跳过兜底，不错误命中纯白的记录
         assert db.find_cached_by_phash("0000000000000000", "m", "") is None
@@ -203,7 +203,7 @@ def test_get_by_result_id_and_recent():
             question="",
             result_id="res_recent",
             source_value="/tmp/a.png",
-            summary="s",
+            peek="s",
             text="t",
             tags=[],
             result_json={},
@@ -231,7 +231,7 @@ def test_search_and_path_filename():
             question="",
             result_id="res_invoice",
             source_value="/data/invoice/invoice_001.png",
-            summary="这是一张发票",
+            peek="这是一张发票",
             text="金额 100 元",
             tags=["invoice"],
             result_json={},
@@ -255,3 +255,41 @@ def test_create_store_returns_sqlite():
     db = create_store(":memory:")
     assert isinstance(db, SQLiteVisionStore)
     db.close()
+
+
+def test_migration_rename_summary_to_peek():
+    """老库（summary 列）打开后自动迁移为 peek 列，数据保留可查询。"""
+    import sqlite3
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        # 手工构造老 schema + 一条老数据
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE image_cache (
+                sha256 TEXT NOT NULL, filename TEXT NOT NULL, phash TEXT,
+                model_id TEXT NOT NULL, question TEXT NOT NULL DEFAULT '',
+                result_id TEXT PRIMARY KEY, source_value TEXT, summary TEXT,
+                text TEXT, tags TEXT, result_json TEXT NOT NULL,
+                read_at TEXT NOT NULL, hit_count INTEGER NOT NULL DEFAULT 0, last_hit_at TEXT
+            );
+            INSERT INTO image_cache (sha256, filename, phash, model_id, question, result_id, source_value, summary, text, tags, result_json, read_at)
+            VALUES ('sha_old', 'old.png', '', 'm', '', 'res_old', '/tmp/old.png', '老预览', '老正文', '[]', '{}', '2026-01-01T00:00:00+00:00');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        db = create_store(db_path)  # 触发迁移
+        try:
+            row = db.get_by_result_id("res_old")
+            assert row["peek"] == "老预览"  # 列已重命名且数据保留
+            assert row["text"] == "老正文"
+            hit = db.find_cached("sha_old", "m", "", "")
+            assert hit is not None and hit["peek"] == "老预览"
+        finally:
+            db.close()
+    finally:
+        os.unlink(db_path)

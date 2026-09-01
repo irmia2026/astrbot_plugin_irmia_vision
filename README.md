@@ -10,7 +10,7 @@
 - `vision_query`：查询已读图的结果，支持关键词、文件名、路径、最近结果、分页。
 - `vision_export`：将大量结果导出为 JSON/CSV，方便交给 Python 脚本批量处理。
 - `see_window`：截取整个屏幕或指定窗口画面并用 VL 模型分析，快速了解用户在干什么（仅 Windows）。
-- 结构化读图结果：要求模型返回 JSON（`summary` 一句话预期 + `text` 完整描述 + `tags` 内容标签），插件容错解析，模型不遵守格式时自动回退。
+- 结构化读图结果：要求模型返回 JSON（`peek` 一句话预览 + `text` 完整内容 + `tags` 内容标签），插件容错解析，模型不遵守格式时自动回退。
 - 异步并发 VL 调用，自适应并发数。
 - 大图片自动压缩后上传。
 - 同一张图读过会命中缓存，避免重复调用 VL 模型。
@@ -128,11 +128,11 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `query` | `string` | 否 | 自然语言搜索（peek 模式：返回 result_id/filename/summary）。 |
+| `query` | `string` | 否 | 自然语言搜索（list 模式：返回 result_id/filename/peek/question）。 |
 | `result_id` | `string` | 否 | 精确查询单条结果（full 模式：包含 path/text/tags）。 |
-| `filename` | `string` | 否 | 按文件名查询（peek 模式）。 |
-| `path` | `string` | 否 | 按路径前缀/包含字符串查询（peek 模式）。 |
-| `recent` | `integer` | 否 | 最近 N 条（peek 模式）。 |
+| `filename` | `string` | 否 | 按文件名查询（list 模式）。 |
+| `path` | `string` | 否 | 按路径前缀/包含字符串查询（list 模式）。 |
+| `recent` | `integer` | 否 | 最近 N 条（list 模式）。 |
 | `limit` | `integer` | 否 | 最多返回条数，默认 20，最大 100。 |
 | `offset` | `integer` | 否 | 分页偏移，默认 0。 |
 

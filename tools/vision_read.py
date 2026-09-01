@@ -20,31 +20,46 @@ from ._vl_client import ImageTooLargeError, normalize_detail, read_image as vl_r
 from .config import resolve_provider_chain
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+# v2 提示词：目标从「为视障人士描述」改为「为智能体提供事实性、可检索的结构化档案」，
+# 按图片类型分流描述重点，文字要求逐字原文提取，明确「看不清」处理。
 DEFAULT_PROMPT = (
-    "你是一位专业的视觉描述者，正在为一位视力障碍人士描述图片。"
-    "请用自然流畅的中文段落，客观、生动地描述图片内容。"
-    "包括：整体场景与背景、主要主体的外观/姿态/表情、空间布局（左、右、前景、背景）、"
-    "光线（光源、对比、阴影）、色调与整体氛围。"
-    "请逐字读出图中所有可见文字。"
-    "严格基于可见内容进行描述，不要猜测。"
-    "最后用 2-3 句话总结图片的主题或隐含叙事。"
+    "你是一位图像分析助手。请基于图片内容给出事实性、可检索的结构化输出，"
+    "供智能体后续查询与决策使用。\n\n"
+    "【图片类型】先判断图片属于哪一类：照片 / 截图 / 文档 / 表格 / 发票票据 / 代码 / "
+    "UI界面 / 图表 / 其他，并据此调整描述重点。\n\n"
+    "【text 字段：按图片类型组织详细内容】\n"
+    "- 截图/UI界面：程序或界面名称、布局、菜单/按钮文字、操作状态（前台窗口、运行中、报错、进度等）\n"
+    "- 文档/发票/票据：文档类型、抬头、关键字段与数值（金额、日期、编号等，逐字准确）\n"
+    "- 代码：逐字符抄写代码内容，并说明语言与用途\n"
+    "- 照片：场景、主体（外观/姿态/表情）、空间布局、光线、色调\n"
+    "- 图表：图表类型、坐标含义、关键数据点与趋势\n"
+    "图中所有可见文字请保留原文逐字提取（不翻译、不改写、不纠错）；描述语言用中文。\n"
+    "仅依据图中可见内容，不要推测画面外信息；看不清/被遮挡/模糊的部分明确写「看不清」。\n\n"
+    "【peek 字段】一句话（不超过80字）概括：图片类型 + 主要内容 + 值得注意的关键信息"
+    "（如金额、报错、人名、数字），让没看图的人快速建立预期。\n\n"
+    "【tags 字段】3-6 个中文名词短语标签，便于检索：类型 + 主体 + 场景/领域 + 关键实体"
+    "（例如：发票、报销单、金额100元、扫描件）。"
 )
 
-# 结构化输出：要求模型返回 JSON（summary/text/tags），插件容错解析。
+# 结构化输出：要求模型返回 JSON（peek/text/tags），插件容错解析。
 # prompt 中必须含 "json" 字样（DeepSeek JSON Output 的官方要求）。
 STRUCTURED_SUFFIX_DEFAULT = (
-    "\n\n请以 JSON 格式输出（json），结构如下：\n"
-    '{"summary": "这是一张xxx图片，可以看到……（一两句话概括，让没看过图的人快速建立预期）", '
-    '"text": "按上述要求展开的完整详尽描述", '
-    '"tags": ["3-6 个内容标签，如 发票/截图/风景/代码/聊天"]}\n'
-    "只输出这个 JSON 对象，不要输出任何其他内容。"
+    "\n\n【输出格式】只输出 JSON 对象：\n"
+    '{"peek": "一句话预览（不超过80字）", '
+    '"text": "按上述要求组织的详细内容", '
+    '"tags": ["3-6 个中文标签"]}\n'
+    "不要输出 JSON 以外的任何内容。"
 )
 STRUCTURED_SUFFIX_QUESTION = (
-    "\n\n请以 JSON 格式输出（json），结构如下：\n"
-    '{"summary": "对问题的一句话直接回答", '
-    '"text": "完整详细的回答（包含依据和细节）", '
-    '"tags": ["3-6 个内容标签"]}\n'
-    "只输出这个 JSON 对象，不要输出任何其他内容。"
+    "\n\n请基于图片内容回答问题，遵循以下规则：\n"
+    "1. 只依据图片中可见的信息，不要推测或编造；看不清/无法确认的部分明确写「图片中无法确认」。\n"
+    "2. 涉及图中文字/数字时，保留原文逐字引用，不翻译、不改写、不纠错。\n"
+    "3. 回答语言用中文。\n\n"
+    "【输出格式】只输出 JSON 对象：\n"
+    '{"peek": "用一句话直接回答（不超过80字）", '
+    '"text": "完整回答，包含关键依据（引用的原文/数字/位置）", '
+    '"tags": ["3-6 个中文标签"]}\n'
+    "不要输出 JSON 以外的任何内容。"
 )
 
 
@@ -92,24 +107,25 @@ def _extract_json(text: str) -> dict | None:
 
 
 def _parse_result(raw: str) -> dict:
-    """解析 VL 返回：优先按结构化 JSON（summary/text/tags）解析，
-    模型不遵守格式时回退到「首行作为摘要」的旧行为，读图永不因解析失败而失败。"""
+    """解析 VL 返回：优先按结构化 JSON（peek/text/tags）解析，
+    模型不遵守格式时回退到「首行作为预览」的旧行为，读图永不因解析失败而失败。
+    兼容旧缓存：读取时 peek 优先，summary 兜底（老记录/老模型输出的字段名）。"""
     text = raw.strip()
     data = _extract_json(text)
     if data:
-        summary = str(data.get("summary") or "").strip()
+        peek = str(data.get("peek") or data.get("summary") or "").strip()
         body = str(data.get("text") or "").strip()
         tags_raw = data.get("tags")
         tags = [str(t).strip() for t in tags_raw if str(t).strip()] if isinstance(tags_raw, list) else []
-        if summary or body:
+        if peek or body:
             return {
-                "summary": (summary or body.split("\n")[0])[:200],
-                "text": body or summary,
+                "peek": (peek or body.split("\n")[0])[:200],
+                "text": body or peek,
                 "tags": tags,
             }
-    summary = text.split("\n")[0] if text else ""
+    peek = text.split("\n")[0] if text else ""
     return {
-        "summary": summary[:200],
+        "peek": peek[:200],
         "text": text,
         "tags": [],
     }
@@ -190,9 +206,9 @@ async def read(
                 prev_sha256 = previous_result.get("sha256", "")
                 if prev_sha256 and prev_sha256 == sha256:
                     is_follow_up = True
-                    previous_summary = previous_result.get("summary", "")
+                    previous_peek = previous_result.get("peek", "") or previous_result.get("summary", "")
                     previous_text = previous_result.get("text", "")
-                    previous_context = f"\n之前对这张图的理解：{previous_summary}\n提取的文字：{previous_text}\n"
+                    previous_context = f"\n之前对这张图的理解：{previous_peek}\n提取的文字：{previous_text}\n"
 
             cached = None
             if not is_follow_up and not force_reread:
@@ -273,11 +289,11 @@ async def read(
                 question=question,
                 result_id=result_id,
                 source_value=path,
-                summary=parsed["summary"],
+                peek=parsed["peek"],
                 text=parsed["text"],
                 tags=parsed["tags"],
                 result_json={
-                    "summary": parsed["summary"],
+                    "peek": parsed["peek"],
                     "text": parsed["text"],
                     "tags": parsed["tags"],
                     "raw": raw,

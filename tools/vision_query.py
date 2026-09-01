@@ -29,16 +29,16 @@ async def query(
         mode = "full"
     elif filename:
         results = await run_sync(db.get_by_filename, filename, limit=max_limit, offset=max_offset)
-        mode = "peek"
+        mode = "list"
     elif path:
         results = await run_sync(db.get_by_path, path, limit=max_limit, offset=max_offset)
-        mode = "peek"
+        mode = "list"
     elif query:
         results = await run_sync(db.search, query, limit=max_limit, offset=max_offset)
-        mode = "peek"
+        mode = "list"
     elif recent > 0:
         results = await run_sync(db.get_recent, limit=min(max(0, recent), max_limit), offset=max_offset)
-        mode = "peek"
+        mode = "list"
     else:
         results = []
         mode = "peek"
@@ -50,7 +50,7 @@ async def query(
         item = {
             "result_id": r.get("result_id", ""),
             "filename": r.get("filename", ""),
-            "summary": r.get("summary", ""),
+            "peek": r.get("peek", "") or r.get("summary", ""),
             # 同一张图可能有多条不同 question 的记录，透出 question 让 LLM 能区分
             "question": r.get("question", ""),
         }
