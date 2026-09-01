@@ -119,6 +119,9 @@ def _parse_result(raw: str) -> dict:
                 "text": body or peek,
                 "tags": tags,
             }
+        # 提取到了 JSON 但无实质内容（如只有 tags）：返回空字段，
+        # 避免兜底路径把 JSON 原文第一行当预览落库
+        return {"peek": "", "text": "", "tags": tags}
     peek = text.split("\n")[0] if text else ""
     return {
         "peek": peek[:200],

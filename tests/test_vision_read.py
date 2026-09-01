@@ -335,3 +335,11 @@ def test_follow_up_context_before_json_instruction(tmp_path):
     p = captured["prompt"]
     assert "之前对这张图的理解" in p
     assert p.index("之前对这张图的理解") < p.index("JSON")  # 上下文在格式要求之前
+
+
+def test_parse_result_json_only_tags():
+    """模型只输出 tags 的 JSON 时返回空字段，不把 JSON 原文当预览落库。"""
+    parsed = _parse_result('{"tags": ["a", "b"]}')
+    assert parsed["peek"] == ""
+    assert parsed["text"] == ""
+    assert parsed["tags"] == ["a", "b"]
