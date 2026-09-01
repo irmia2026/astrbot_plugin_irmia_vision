@@ -152,6 +152,20 @@ async def read(
                 return
 
             phash = await run_sync(_compute_phash, path)
+
+            if not is_follow_up and not force_reread and phash:
+                # sha256 精确未命中 → phash 近似兜底：缩尺/重压缩的同图也能命中
+                cached = await run_sync(
+                    db.find_cached_by_phash, phash, (primary or {}).get("model", ""), question
+                )
+                if cached:
+                    cached_count += 1
+                    logger.info(
+                        f"phash 近似命中 {path} → {cached.get('result_id')} "
+                        f"(distance={cached.get('phash_distance')})"
+                    )
+                    return
+
             final_prompt = prompt + previous_context if previous_context else prompt
 
             if not chain:

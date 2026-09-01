@@ -60,6 +60,53 @@ def test_find_cached_and_insert():
         os.unlink(db_path)
 
 
+def test_find_cached_by_phash():
+    db, db_path = _make_db()
+    try:
+        db.insert(
+            sha256="sha1",
+            filename="a.png",
+            phash="0123456789abcdef",
+            model_id="gpt-4o",
+            question="",
+            result_id="res_phash",
+            source_value="/tmp/a.png",
+            summary="s",
+            text="t",
+            tags=[],
+            result_json={},
+        )
+
+        # 相同 phash → 命中，且标注 matched_by
+        hit = db.find_cached_by_phash("0123456789abcdef", "gpt-4o", "")
+        assert hit is not None
+        assert hit["result_id"] == "res_phash"
+        assert hit["matched_by"] == "phash"
+        assert hit["phash_distance"] == 0
+
+        # 距离 4（末位 f→0）≤ 阈值 5 → 命中
+        near = db.find_cached_by_phash("0123456789abcde0", "gpt-4o", "")
+        assert near is not None
+        assert near["phash_distance"] == 4
+
+        # 距离远超阈值 → 不命中
+        far = db.find_cached_by_phash("fedcba9876543210", "gpt-4o", "")
+        assert far is None
+
+        # 空 phash → 直接 None
+        assert db.find_cached_by_phash("", "gpt-4o", "") is None
+
+        # question 不同 → 不命中
+        assert db.find_cached_by_phash("0123456789abcdef", "gpt-4o", "别的问题") is None
+
+        # model_id 不同 → 不命中；model_id 为空放宽 → 命中
+        assert db.find_cached_by_phash("0123456789abcdef", "other-model", "") is None
+        assert db.find_cached_by_phash("0123456789abcdef", "", "") is not None
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
 def test_get_by_result_id_and_recent():
     db, db_path = _make_db()
     try:

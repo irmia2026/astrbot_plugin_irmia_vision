@@ -51,6 +51,11 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 - `question` 同一个问题命中缓存，不同问题重新读。
 - `filename` 仍随记录落库，供查询/展示使用，只是不参与缓存匹配。
 
+sha256 精确未命中后，还有 phash 感知哈希近似兑底（`find_cached_by_phash`）：
+同 model + 同 question 的记录中，phash 汉明距离 ≤ 5（64bit）的最近一条视为同一图片。
+缩尺/重压缩后 sha256 必变但 phash 几乎不变，靠此兑现「被压缩过的同图也命中缓存」。
+近似命中的返回附带 `matched_by="phash"` 与 `phash_distance`，供调用方甄别。
+
 追问模式通过 `previous_result_id` 携带上文，但只作用于与之前同一张图片（sha256 相同），避免污染多张图片。
 
 ## 模块职责

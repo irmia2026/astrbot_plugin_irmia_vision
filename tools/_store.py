@@ -31,6 +31,16 @@ class VisionStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def find_cached_by_phash(self, phash: str, model_id: str, question: str = "", max_distance: int = 5) -> dict | None:
+        """sha256 精确未命中后的近似兑底：按感知哈希匹配。
+
+        命中条件：同 model_id + question 的记录中，phash 汉明距离 <= max_distance
+        的最近一条。缩尺/重压缩的同一张图 sha256 必变，但 phash 几乎不变。
+        返回字典附带 matched_by="phash" 和 phash_distance，供调用方知晓是近似命中。
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def insert(self, *, sha256: str, filename: str, phash: str, model_id: str, question: str,
                result_id: str, source_value: str, summary: str, text: str, tags: list[str],
                result_json: dict) -> None:
@@ -154,6 +164,64 @@ class SQLiteVisionStore(VisionStore):
                     "hit_count": hit_row[0] if hit_row else 1,
                 }
             return None
+
+    @staticmethod
+    def _phash_distance(a: str, b: str) -> int | None:
+        """两个十六进制 phash 的汉明距离；为空、长度不一致或非十六进制时返回 None。"""
+        a = (a or "").strip()
+        b = (b or "").strip()
+        if not a or not b or len(a) != len(b):
+            return None
+        try:
+            return bin(int(a, 16) ^ int(b, 16)).count("1")
+        except ValueError:
+            return None
+
+    def find_cached_by_phash(self, phash: str, model_id: str, question: str = "", max_distance: int = 5) -> dict | None:
+        if not phash:
+            return None
+        with self._lock:
+            db = self._ensure_conn()
+            if model_id:
+                rows = db.execute(
+                    "SELECT result_id, result_json, summary, text, tags, read_at, phash FROM image_cache WHERE model_id = ? AND question = ? AND phash IS NOT NULL AND phash != ''",
+                    (model_id, question),
+                ).fetchall()
+            else:
+                # model_id 为空时放宽为任意模型命中（与 find_cached 一致）
+                rows = db.execute(
+                    "SELECT result_id, result_json, summary, text, tags, read_at, phash FROM image_cache WHERE question = ? AND phash IS NOT NULL AND phash != ''",
+                    (question,),
+                ).fetchall()
+            best = None
+            best_dist = max_distance + 1
+            for row in rows:
+                d = self._phash_distance(phash, row[6])
+                if d is not None and d < best_dist:
+                    best = row
+                    best_dist = d
+            if best is None:
+                return None
+            db.execute(
+                "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
+                (datetime.now(timezone.utc).isoformat(), best[0]),
+            )
+            db.commit()
+            hit_row = db.execute(
+                "SELECT hit_count FROM image_cache WHERE result_id = ?",
+                (best[0],),
+            ).fetchone()
+            return {
+                "result_id": best[0],
+                "result_json": best[1],
+                "summary": best[2],
+                "text": best[3],
+                "tags": best[4],
+                "read_at": best[5],
+                "hit_count": hit_row[0] if hit_row else 1,
+                "matched_by": "phash",
+                "phash_distance": best_dist,
+            }
 
     def insert(
         self,
