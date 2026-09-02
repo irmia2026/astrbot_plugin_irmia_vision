@@ -128,8 +128,8 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
+| `result_id` | `string` | 否 | 精确查询单条结果（full 模式：包含 path、完整描述 text、tags 等）。 |
 | `query` | `string` | 否 | 自然语言搜索（list 模式：返回 result_id/filename/peek/question）。 |
-
 | `filename` | `string` | 否 | 按文件名查询（list 模式）。 |
 | `path` | `string` | 否 | 按路径前缀/包含字符串查询（list 模式）。 |
 | `recent` | `integer` | 否 | 最近 N 条（list 模式）。 |
@@ -154,7 +154,7 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 - 只处理 `png/jpg/jpeg/webp/gif/bmp` 图片。
 - 大图片会自动压缩到长边 2048 后上传；仅当压缩后仍超过 20MB 才报错（不限制原始文件大小）。
 - 同一张图（按内容 hash + 模型 + 问题 + detail 档位，与文件名无关）读过会命中缓存，不再重复调用 VL 模型；缩尺/重压缩过的同图会经 phash 感知哈希近似命中（纯色图除外；see_window 为保证屏幕内容新鲜禁用近似命中）。近似命中会在响应中明确标注 `cached_via_phash`。
-
+- `vision_read` 只返回读取计数与下一步建议（不返回每张图内容）：单图建议直接 full 查，批量建议先 list 浏览。详细内容请用 `vision_query` 查询。
 - 路径支持绝对路径、相对路径和 `~` 用户主目录。
 - 并发数默认根据 `timeout` 自适应，避免把慢 API 打挂。如需固定，可配置 `concurrency`。
 - 支持多模型降级：三个下拉框按优先级排列，靠前的模型失败时自动切换到下一个。全部留空则自动使用所有已保存模型。

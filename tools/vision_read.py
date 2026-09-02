@@ -23,21 +23,27 @@ SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 # v3 提示词：刻意精简。只保留解析契约（JSON schema）与三条质量护栏
 # （原文提取 / 不猜测 / 中文），把描述重点的判断权交给模型，
 # 避免类型枚举清单把模型注意力锚死在清单内维度、忽略清单外的细节。
+# JSON 契约放在独立后缀：追问上下文注入在 base 与 suffix 之间，
+# 保证任何路径下模型最后看到的都是格式要求（previous_result_id 无 question 路径也一样）。
 DEFAULT_PROMPT = (
-    "请基于图片内容输出 JSON（json）："
+    "请基于图片内容给出结构化描述。"
+    "图中文字/数字逐字保留原文（不翻译不纠错）；只依据可见内容，"
+    "看不清的部分写「看不清」；正文用中文。"
+)
+STRUCTURED_SUFFIX_DEFAULT = (
+    "\n\n输出 JSON（json）："
     '{"peek": "一句话预览：这是什么图+最值得注意的信息", '
     '"text": "详细描述：你注意到的一切，按图片类型自行决定重点'
     '（如截图重在界面文字与状态、票据重在关键字段数值）", '
-    '"tags": ["3-6个中文检索标签"]}\n'
-    "要求：图中文字/数字逐字保留原文（不翻译不纠错）；只依据可见内容，"
-    "看不清的部分写「看不清」；text 用中文。不要输出 JSON 以外的任何内容。"
+    '"tags": ["3-6个中文检索标签"]}。'
+    "不要输出 JSON 以外的任何内容。"
 )
 
 # 结构化输出：要求模型返回 JSON（peek/text/tags），插件容错解析。
 # prompt 中必须含 "json" 字样（DeepSeek JSON Output 的官方要求）。
 STRUCTURED_SUFFIX_QUESTION = (
     "\n\n仅依据图片可见内容回答（文字/数字逐字引用原文；无法确认就明说），"
-    "输出 JSON（json）："
+    "回答语言用中文。输出 JSON（json）："
     '{"peek": "一句话直接回答", '
     '"text": "完整回答与依据", '
     '"tags": ["3-6个检索标签"]}。'
@@ -94,6 +100,8 @@ _PLACEHOLDER_VALUES = frozenset({
     "一句话直接回答",
     "详细描述：你注意到的一切，按图片类型自行决定重点（如截图重在界面文字与状态、票据重在关键字段数值）",
     "完整回答与依据",
+    "3-6个中文检索标签",
+    "3-6个检索标签",
 })
 
 
@@ -103,7 +111,7 @@ def _parse_result(raw: str) -> dict:
     兼容旧缓存：读取时 peek 优先，summary 兜底（老记录/老模型输出的字段名）。"""
     text = raw.strip()
     data = _extract_json(text)
-    if data:
+    if data is not None:  # 含空对象 {}：走结构化分支返回空字段，避免兜底把 JSON 原文当预览
         peek = str(data.get("peek") or data.get("summary") or "").strip()
         body = str(data.get("text") or "").strip()
         # 占位符被原样照抄时视为无内容，回退处理
@@ -113,6 +121,7 @@ def _parse_result(raw: str) -> dict:
             body = ""
         tags_raw = data.get("tags")
         tags = [str(t).strip() for t in tags_raw if str(t).strip()] if isinstance(tags_raw, list) else []
+        tags = [t for t in tags if t not in _PLACEHOLDER_VALUES]  # 剔除照抄的占位符标签
         if peek or body:
             return {
                 "peek": (peek or body.split("\n")[0])[:200],
@@ -160,9 +169,10 @@ async def read(
             "未找到任何支持的图片文件。请确认路径存在，并且包含 png/jpg/jpeg/webp/gif/bmp 格式的图片。",
             options=["检查路径是否正确", "使用 vision_query 查看已有结果"],
         )
-    # 默认模式的 JSON 要求已并入 DEFAULT_PROMPT，无需后缀；追问模式才需要规则+格式后缀
+    # 默认/追问模式都有 JSON 契约后缀：追问上下文注入在 base 与 suffix 之间，
+    # 保证任何路径下模型最后看到的都是格式要求
     base_prompt = question if question else DEFAULT_PROMPT
-    prompt_suffix = STRUCTURED_SUFFIX_QUESTION if question else ""
+    prompt_suffix = STRUCTURED_SUFFIX_QUESTION if question else STRUCTURED_SUFFIX_DEFAULT
 
     # 不在此处拦截空链：命中缓存（此前已读过的图）不需要 VL 模型配置。
     # 只有存在未命中、需要调用模型的路径才要求 chain 非空（见 _read_one）。
@@ -278,6 +288,11 @@ async def read(
                 raise ValueError("所有 VL 模型均返回空内容，无法读图")
 
             parsed = _parse_result(raw)
+            if not parsed["peek"] and not parsed["text"]:
+                # 模型返回了空内容 JSON（如 {"tags": [...]} / {}）：
+                # 视为本次读图失败，不落库——否则空记录会永久占用缓存键，
+                # 后续命中返回空内容且 agent 无任何失败信号
+                raise ValueError(f"模型返回内容结构化解析后为空: {raw[:100]}")
             result_id = f"res_{uuid.uuid4().hex[:12]}"
 
             await run_sync(

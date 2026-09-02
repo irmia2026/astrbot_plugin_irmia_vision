@@ -374,3 +374,91 @@ def test_batch_read_next_call_is_list_mode(tmp_path):
             db.close()
 
     asyncio.run(_run())
+
+
+def test_parse_result_tags_placeholder_filtered():
+    """tags 中的占位符照抄（如 '3-6个检索标签'）会被剔除。"""
+    raw = '{"peek": "真实预览", "text": "正文", "tags": ["3-6个检索标签", "发票"]}'
+    parsed = _parse_result(raw)
+    assert parsed["tags"] == ["发票"]
+
+
+def test_parse_result_empty_json_object():
+    """空 JSON 对象 {} 不落入兜底路径把原文当预览。"""
+    parsed = _parse_result("{}")
+    assert parsed["peek"] == ""
+    assert parsed["text"] == ""
+
+
+def test_follow_up_without_question_keeps_json_instruction_last(tmp_path):
+    """无 question 但带 previous_result_id 的路径：上下文仍在 JSON 格式要求之前。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    db.insert(
+        sha256=db.sha256_of_file(img_path),
+        filename="doc.png",
+        phash="",
+        model_id="fake-vl",
+        question="",
+        result_id="res_prev",
+        source_value=img_path,
+        peek="之前的预览",
+        text="之前的正文",
+        tags=[],
+        result_json={},
+    )
+
+    captured = {}
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+        captured["prompt"] = prompt
+        return '{"peek": "预览", "text": "正文", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[img_path], previous_result_id="res_prev")
+            assert result["read"] == 1
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+    p = captured["prompt"]
+    assert "之前对这张图的理解" in p
+    assert p.index("之前对这张图的理解") < p.index("输出 JSON")
+
+
+def test_empty_structured_content_not_stored(tmp_path):
+    """模型返回纯 tags/空 JSON（解析后无实质内容）→ 计为失败且不落库，
+    避免空记录永久占用缓存键。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+        return '{"tags": ["抽风"]}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[img_path])
+            # 全部失败时返回提案式错误形态（无 read/cached 键）
+            assert result["ok"] is False
+            assert "结构化解析后为空" in result["proposal"]
+            # 不落库：DB 应为空
+            assert db.get_recent(limit=10) == []
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
