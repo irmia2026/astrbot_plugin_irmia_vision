@@ -164,13 +164,13 @@ class SQLiteVisionStore(VisionStore):
             dclause, dparams = self._detail_clause(detail)
             if model_id:
                 row = db.execute(
-                    f"SELECT result_id, result_json, peek, text, tags, read_at FROM image_cache WHERE sha256 = ? AND model_id = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
+                    f"SELECT result_id, result_json, peek, text, tags, read_at FROM image_cache WHERE sha256 = ? AND model_id = ? AND question = ? AND {dclause} ORDER BY read_at DESC, rowid DESC",
                     (sha256, model_id, question, *dparams),
                 ).fetchone()
             else:
                 # model_id 为空时放宽为任意模型命中（同一张图的缓存不因换配置而失效）
                 row = db.execute(
-                    f"SELECT result_id, result_json, peek, text, tags, read_at FROM image_cache WHERE sha256 = ? AND question = ? AND {dclause} ORDER BY read_at DESC",
+                    f"SELECT result_id, result_json, peek, text, tags, read_at FROM image_cache WHERE sha256 = ? AND question = ? AND {dclause} ORDER BY read_at DESC, rowid DESC",
                     (sha256, question, *dparams),
                 ).fetchone()
             if row:
@@ -232,13 +232,13 @@ class SQLiteVisionStore(VisionStore):
             dclause, dparams = self._detail_clause(detail)
             if model_id:
                 rows = db.execute(
-                    f"SELECT result_id, phash FROM image_cache WHERE model_id = ? AND question = ? AND {dclause} AND phash IS NOT NULL AND phash != '' ORDER BY read_at DESC",
+                    f"SELECT result_id, phash FROM image_cache WHERE model_id = ? AND question = ? AND {dclause} AND phash IS NOT NULL AND phash != '' ORDER BY read_at DESC, rowid DESC",
                     (model_id, question, *dparams),
                 ).fetchall()
             else:
                 # model_id 为空时放宽为任意模型命中（与 find_cached 一致）
                 rows = db.execute(
-                    f"SELECT result_id, phash FROM image_cache WHERE question = ? AND {dclause} AND phash IS NOT NULL AND phash != '' ORDER BY read_at DESC",
+                    f"SELECT result_id, phash FROM image_cache WHERE question = ? AND {dclause} AND phash IS NOT NULL AND phash != '' ORDER BY read_at DESC, rowid DESC",
                     (question, *dparams),
                 ).fetchall()
             best_id = None
@@ -352,7 +352,7 @@ class SQLiteVisionStore(VisionStore):
                 """
                 SELECT * FROM image_cache
                 WHERE source_value LIKE ? ESCAPE '\\'
-                ORDER BY read_at DESC
+                ORDER BY read_at DESC, rowid DESC
                 LIMIT ? OFFSET ?
                 """,
                 (like, limit, offset),
@@ -367,7 +367,7 @@ class SQLiteVisionStore(VisionStore):
             rows = db.execute(
                 """
                 SELECT * FROM image_cache
-                ORDER BY read_at DESC
+                ORDER BY read_at DESC, rowid DESC
                 LIMIT ? OFFSET ?
                 """,
                 (limit, offset),
@@ -400,7 +400,7 @@ class SQLiteVisionStore(VisionStore):
             db = self._ensure_conn()
             db.row_factory = sqlite3.Row
             rows = db.execute(
-                "SELECT * FROM image_cache WHERE filename = ? ORDER BY read_at DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM image_cache WHERE filename = ? ORDER BY read_at DESC, rowid DESC LIMIT ? OFFSET ?",
                 (filename, limit, offset),
             ).fetchall()
             db.row_factory = None
@@ -412,12 +412,12 @@ class SQLiteVisionStore(VisionStore):
             db.row_factory = sqlite3.Row
             if limit > 0:
                 rows = db.execute(
-                    "SELECT * FROM image_cache ORDER BY read_at DESC LIMIT ? OFFSET ?",
+                    "SELECT * FROM image_cache ORDER BY read_at DESC, rowid DESC LIMIT ? OFFSET ?",
                     (limit, offset),
                 ).fetchall()
             else:
                 rows = db.execute(
-                    "SELECT * FROM image_cache ORDER BY read_at DESC LIMIT -1 OFFSET ?",
+                    "SELECT * FROM image_cache ORDER BY read_at DESC, rowid DESC LIMIT -1 OFFSET ?",
                     (offset,),
                 ).fetchall()
             db.row_factory = None

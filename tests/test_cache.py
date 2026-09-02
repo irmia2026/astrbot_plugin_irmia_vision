@@ -333,3 +333,32 @@ def test_migration_rename_summary_to_peek():
             db.close()
     finally:
         os.unlink(db_path)
+
+
+def test_find_cached_same_tick_returns_latest(monkeypatch):
+    """同一时钟 tick 内连续插入同 sha 记录（Windows 粗时钟 ~15.6ms 粒度场景），
+    read_at 并列时 find_cached 必须返回后插入者（rowid DESC 兜底）。"""
+    import tools._store as store_mod
+    from datetime import datetime as _dt, timezone as _tz
+
+    class _FixedDateTime:
+        @staticmethod
+        def now(tz=None):
+            return _dt(2026, 1, 1, tzinfo=_tz.utc)
+
+    monkeypatch.setattr(store_mod, "datetime", _FixedDateTime)
+
+    db, db_path = _make_db()
+    try:
+        for rid in ("res_first", "res_second"):
+            db.insert(
+                sha256="sha_same", filename="a.png", phash="", model_id="m", question="",
+                result_id=rid, source_value="/tmp/a.png", peek=f"peek-{rid}", text="t",
+                tags=[], result_json={},
+            )
+        hit = db.find_cached("sha_same", "m", "")
+        assert hit is not None
+        assert hit["result_id"] == "res_second"  # read_at 并列时 rowid 兜底取后插入者
+    finally:
+        db.close()
+        os.unlink(db_path)
