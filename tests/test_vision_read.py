@@ -343,3 +343,34 @@ def test_parse_result_json_only_tags():
     assert parsed["peek"] == ""
     assert parsed["text"] == ""
     assert parsed["tags"] == ["a", "b"]
+
+
+def test_batch_read_next_call_is_list_mode(tmp_path):
+    """批量读图后 next_call 应引导 list 模式（recent），不能夹带 result_id
+    （否则 vision_query 会优先走 full，agent 只能看到第一张的详情）。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    _make_test_image(str(tmp_path / "a.png"), size=(800, 600))
+    _make_test_image(str(tmp_path / "b.png"), size=(820, 610))  # 尺寸不同 → 内容指纹不同，避免互相命中缓存
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+        return '{"peek": "预览", "text": "正文", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(
+                db, paths=[str(tmp_path / "a.png"), str(tmp_path / "b.png")]
+            )
+            assert result["read"] == 2
+            args = result["next_call"]["arguments"]
+            assert args == {"recent": 2}
+            assert "result_id" not in args
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())

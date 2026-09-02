@@ -344,11 +344,12 @@ async def read(
 
     next_args: dict = {}
     if first_result_id and last_result_id and first_result_id == last_result_id:
+        # 单图：目标明确，直接 full 查这条
         next_args = {"result_id": first_result_id}
     else:
+        # 批量：只给 recent（list 模式浏览全部预览），不夹带 result_id——
+        # 否则 vision_query 里 result_id 优先级最高，会直接 full 第一张而跳过其余
         next_args = {"recent": min(len(image_paths), 10)}
-        if first_result_id:
-            next_args["result_id"] = first_result_id
 
     reply = {
         "ok": True,
