@@ -68,7 +68,7 @@ sha256 精确未命中后，还有 phash 感知哈希近似兜底（`find_cached
 
 读图 prompt 要求模型返回 JSON：`{"peek": "一句话预览（图片类型+主要内容+关键信息）", "text": "完整描述/回答", "tags": [...]}`。
 
-- `peek` 是给 agent 的一句话预览（默认读图）或对问题的一句话直接回答（追问模式），替代原先脆弱的「取首行」逻辑。
+
 - `tags` 字段真正填充（此前恒为 `[]`），提升 `vision_query` 搜索质量。
 - v4fve 额外附加官方 `response_format={"type":"json_object"}`（DeepSeek JSON Output）；其他模型仅靠 prompt 引导。
 - `_parse_result` 容错解析：容忍 ```json 围栏与前后杂音，解析失败回退「首行摘要」旧行为——读图永不因解析失败而失败。

@@ -16,9 +16,7 @@
 - **phash 纯色守卫覆盖候选侧**：此前只拦查询侧，库中已落库的纯色记录（phash 全 0/全 1）仍会作为候选被正常图片误命中；现两侧都过滤。
 - **追问上下文注入位置修正**：`previous_context` 移到 JSON 输出要求之前（此前追加在「不要输出 JSON 以外的任何内容」之后，模型最后看到的不是格式指令）；同时加上限（peek 200 字 / text 1000 字）防超长上文。
 - **JSON 骨架占位符照抄防护**：弱模型可能把 prompt 示例中的占位符原文（如「一句话直接回答」）照抄落库，解析时识别并剔除，按兜底路径处理。
-- **`vision_query` 无参数分支 mode 残留修正**：else 分支误留 `"peek"`，统一为 `"list"`。
-
-- **detail 纳入缓存键**：detail 是影响模型输入（从而影响输出）的配置维度，此前改 detail 配置后同图同问题会静默命中旧档位缓存。`''` 与 `'auto'` 语义等价互相兼容，老记录不受影响。
+：detail 是影响模型输入（从而影响输出）的配置维度，此前改 detail 配置后同图同问题会静默命中旧档位缓存。`''` 与 `'auto'` 语义等价互相兼容，老记录不受影响。
 - **`detail=original` 不再被客户端压缩架空**：original 语义为保留原图，现跳过客户端降采样（此前 v4fve 下仍被压到 1024，see_window 读屏小字场景最受其害）。
 - **detail 配置经 provider 降级链继承**：`_provider_to_vl_config` 与 concurrency/max_retries 同一模式从全局 vl_model 继承 detail（此前走下拉框链路配 detail 不生效）。
 - **detail 枚举归一化**：strip + 小写 + 白名单校验，非法值告警并回退 auto（此前乱配会原样发给 API 导致 400；跨 provider 语义差异：OpenAI 认 high / DeepSeek 认 original）。
