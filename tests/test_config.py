@@ -118,6 +118,36 @@ def test_resolve_provider_chain_auto_all_when_empty_ids():
         assert chain[1]["model"] == "model-b"
 
 
+def test_provider_chain_inherits_detail():
+    """provider 链配置从全局 vl_model 继承 detail（与 concurrency/max_retries 同一模式）。"""
+    providers = [
+        {"id": "prov-a", "type": "openai_chat_completion", "api_base": "https://a.example.com/v1", "key": ["sk-a"], "model": "model-a"},
+    ]
+    cfg = {
+        "vl_provider_ids": "prov-a",
+        "vl_model": {"api_key": "sk-fallback", "model": "fallback", "detail": "original"},
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config(cfg, tmpdir)
+        tool_config.set_providers(providers)
+        chain = tool_config.resolve_provider_chain()
+        assert len(chain) == 1
+        assert chain[0]["detail"] == "original"
+
+
+def test_provider_chain_detail_default_auto():
+    """vl_model 未配 detail 时 provider 链配置 detail 默认为 auto。"""
+    providers = [
+        {"id": "prov-a", "type": "openai_chat_completion", "api_base": "https://a.example.com/v1", "key": ["sk-a"], "model": "model-a"},
+    ]
+    cfg = {"vl_provider_ids": "prov-a", "vl_model": {"api_key": "sk-fallback"}}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config(cfg, tmpdir)
+        tool_config.set_providers(providers)
+        chain = tool_config.resolve_provider_chain()
+        assert chain[0]["detail"] == "auto"
+
+
 def test_provider_key_as_string():
     """provider 的 key 字段为字符串时也能正确提取。"""
     providers = [

@@ -25,6 +25,7 @@ _DEFAULT_CONFIG = {
         "timeout": 120.0,
         "concurrency": 50,
         "max_retries": 2,
+        "detail": "auto",
     },
 }
 

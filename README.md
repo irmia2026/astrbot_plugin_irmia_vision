@@ -10,6 +10,7 @@
 - `vision_query`：查询已读图的结果，支持关键词、文件名、路径、最近结果、分页。
 - `vision_export`：将大量结果导出为 JSON/CSV，方便交给 Python 脚本批量处理。
 - `see_window`：截取整个屏幕或指定窗口画面并用 VL 模型分析，快速了解用户在干什么（仅 Windows）。
+- 结构化读图结果：要求模型返回 JSON（`peek` 一句话预览 + `text` 完整内容 + `tags` 内容标签），插件容错解析，模型不遵守格式时自动回退。
 - 异步并发 VL 调用，自适应并发数。
 - 大图片自动压缩后上传。
 - 同一张图读过会命中缓存，避免重复调用 VL 模型。
@@ -85,6 +86,7 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 | `timeout` | 单次 VL 请求超时时间（秒），默认 120。 |
 | `concurrency` | 并发请求数。留空时根据 `timeout` 自适应，最高 200。 |
 | `max_retries` | 单张图失败重试次数，默认 2。 |
+| `detail` | 图片细节级别（支持 detail 的模型，如 DeepSeek v4fve）：`low` 更快更省、`auto` 自动（默认）、`original` 保留原图。 |
 
 ## 使用示例
 
@@ -126,11 +128,11 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `query` | `string` | 否 | 自然语言搜索（peek 模式：返回 result_id/filename/summary）。 |
-| `result_id` | `string` | 否 | 精确查询单条结果（full 模式：包含 path/text/tags）。 |
-| `filename` | `string` | 否 | 按文件名查询（peek 模式）。 |
-| `path` | `string` | 否 | 按路径前缀/包含字符串查询（peek 模式）。 |
-| `recent` | `integer` | 否 | 最近 N 条（peek 模式）。 |
+| `result_id` | `string` | 否 | 精确查询单条结果（full 模式：包含 path、完整描述 text、tags 等）。 |
+| `query` | `string` | 否 | 自然语言搜索（list 模式：返回 result_id/filename/peek/question）。 |
+| `filename` | `string` | 否 | 按文件名查询（list 模式）。 |
+| `path` | `string` | 否 | 按路径前缀/包含字符串查询（list 模式）。 |
+| `recent` | `integer` | 否 | 最近 N 条（list 模式）。 |
 | `limit` | `integer` | 否 | 最多返回条数，默认 20，最大 100。 |
 | `offset` | `integer` | 否 | 分页偏移，默认 0。 |
 
@@ -150,12 +152,13 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 ## 注意事项
 
 - 只处理 `png/jpg/jpeg/webp/gif/bmp` 图片。
-- 单张图片最大 20MB，超过会报错；大图片会自动压缩到长边 2048 后上传。
-- 同一张图（按内容 hash + 文件名 + 模型 + 问题）读过会命中缓存，不再重复调用 VL 模型。
-- `vision_read` 只返回摘要，详细内容请用 `vision_query` 查询。
+- 大图片会自动压缩到长边 2048 后上传；仅当压缩后仍超过 20MB 才报错（不限制原始文件大小）。
+- 同一张图（按内容 hash + 模型 + 问题 + detail 档位，与文件名无关）读过会命中缓存，不再重复调用 VL 模型；缩尺/重压缩过的同图会经 phash 感知哈希近似命中（纯色图除外；see_window 为保证屏幕内容新鲜禁用近似命中）。近似命中会在响应中明确标注 `cached_via_phash`。
+- `vision_read` 只返回读取计数与下一步建议（不返回每张图内容）：单图建议直接 full 查，批量建议先 list 浏览。详细内容请用 `vision_query` 查询。
 - 路径支持绝对路径、相对路径和 `~` 用户主目录。
 - 并发数默认根据 `timeout` 自适应，避免把慢 API 打挂。如需固定，可配置 `concurrency`。
 - 支持多模型降级：三个下拉框按优先级排列，靠前的模型失败时自动切换到下一个。全部留空则自动使用所有已保存模型。
+- DeepSeek v4fve（`deepseek-v4-flash-vision-exp`）适配：检测到该模型时压缩长边自动从 2048 降为 1024（其服务端会将图片缩放到总像素约 800×800、每张 token 上限 384，更大输入无收益只费带宽），并自动处理其推理模式的 `reasoning_content` 回退。
 
 ## 开发
 

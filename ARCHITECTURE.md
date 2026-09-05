@@ -9,7 +9,7 @@
 四个工具，差分明显：
 
 - `vision_read`：读图并落库，只返回摘要，不返回每张图的详细内容。
-- `vision_query`：查询已落库的结果。列表查询返回轻量摘要（peek 模式），`result_id` 精确查询返回完整信息（full 模式）。
+- `vision_query`：查询已落库的结果。列表查询返回轻量列表（list 模式，每行含 `peek` 一句话预览），`result_id` 精确查询返回完整信息（full 模式）。
 - `vision_export`：把符合条件的结果导出为 JSON/CSV 文件，方便外部脚本批量处理。
 - `see_window`：截取整个屏幕或指定窗口画面，用 VL 模型分析（默认提示词偏向判断用户在干什么），仅支持 Windows。
 
@@ -26,7 +26,7 @@ LLM 调用 vision_read(paths=[...])
   │ 是 → 跳过 VL 调用，命中数 +1
   │ 否  ▼
   │ 调用用户配置的 VL 模型
-  │ 解析结果（summary / text / tags）
+  │ 解析结果（peek / text / tags）
   │ 写入 SQLite 缓存
   │
   ▼
@@ -36,7 +36,7 @@ LLM 调用 vision_read(paths=[...])
 LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
   │
   ▼
-返回 peek/full 模式的结果列表
+返回 list/full 模式的结果列表
   │
   ▼
 如需批量处理大量结果，调用 vision_export 导出 JSON/CSV 文件
@@ -44,14 +44,36 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 
 ## 缓存设计
 
-表 `image_cache` 以 `(sha256, filename, model_id, question)` 为逻辑缓存键：
+表 `image_cache` 以 `(sha256, model_id, question, detail)` 为逻辑缓存键（内容寻址，不含文件名）：
 
-- `sha256` 保证同内容不重复读。
-- `filename` 保证同内容不同文件名可分别缓存（对文件分类场景重要）。
-- `model_id` 换模型时重新读，避免不同模型描述差异污染。
-- `question` 同一个问题命中缓存，不同问题重新读。
+- `sha256` 保证同内容不重复读，与文件名无关——`see_window` 的时间戳截图文件名每次不同，含 filename 会让缓存永远 miss。
+- `model_id` 换模型时重新读，避免不同模型描述差异污染；`model_id` 为空时放宽为任意模型命中。
+- `question` 同一个问题命中缓存，不同问题重新读（同图多问题并存为多条记录，不互相覆盖）。
+- `detail` 影响模型实际输入（从而影响输出），必须在缓存键内；`''` 与 `'auto'` 语义等价互相兼容（老记录迁移友好）。
+- `filename` 仍随记录落库，供查询/展示使用，只是不参与缓存匹配。
+
+sha256 精确未命中后，还有 phash 感知哈希近似兜底（`find_cached_by_phash`）：
+同 model + 同 question + 同 detail 的记录中，phash 汉明距离 ≤ 5（64bit）的最近一条视为同一图片。
+缩尺/重压缩后 sha256 必变但 phash 几乎不变，靠此兑现「被压缩过的同图也命中缓存」。
+防护与透明化：
+
+- 纯色/低信息图片（phash 置 1 比特 < 4 或 > 60）跳过兜底——此类 phash 必然互相误判。
+- `see_window` 调用时 `allow_phash=False` 禁用兜底——屏幕内容时刻在变，近似命中会返回过期描述。
+- 两阶段查询：先轻列（result_id, phash）扫描候选，再取最佳一行的完整记录，避免重列全拉内存。
+- 近似命中的返回附带 `matched_by="phash"` / `phash_distance`，且 `vision_read` 响应中透传 `cached_via_phash` 计数与提示。
 
 追问模式通过 `previous_result_id` 携带上文，但只作用于与之前同一张图片（sha256 相同），避免污染多张图片。
+
+## 结构化输出
+
+读图 prompt 要求模型返回 JSON：`{"peek": "一句话预览：这是什么图+最值得注意的信息", "text": "详细描述/完整回答", "tags": [...]}`。
+
+- `peek` 是给 agent 的一句话预览（默认读图）或对问题的一句话直接回答（追问模式），替代原先脆弱的「取首行」逻辑。
+- `tags` 字段真正填充（此前恒为 `[]`），提升 `vision_query` 搜索质量。
+- 提示词刻意精简（v3）：只保留解析契约与三条质量护栏（文字逐字原文 / 只依据可见内容，看不清明说 / 中文输出），不设类型枚举清单，描述重点的判断权交给模型——避免模型被套模板、忽略清单外的细节，同时降低高并发批量读图的 prompt token 开销。
+- 追问上文（`previous_result_id`）注入在任务描述与 JSON 输出要求之间，保证任何路径下模型最后看到的都是格式指令；上文有截断上限（peek 200 字 / text 1000 字）。
+- v4fve 额外附加官方 `response_format={"type":"json_object"}`（DeepSeek JSON Output）；其他模型仅靠 prompt 引导。
+- `_parse_result` 容错解析：容忍 ```json 围栏与前后杂音，解析失败回退「首行摘要」旧行为——读图永不因解析失败而失败。
 
 ## 模块职责
 
@@ -60,7 +82,7 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 | `main.py` | 插件入口：加载配置、从 AstrBot context 读取已保存模型列表、初始化数据库、注册工具 |
 | `tools/_registry.py` | 工厂函数 `make_tool`，注册四个工具实例 |
 | `tools/vision_read.py` | 扫描路径、缓存判断、调用 VL、落库、返回摘要 |
-| `tools/vision_query.py` | 按多种条件查询缓存结果，支持 peek/full 模式 |
+| `tools/vision_query.py` | 按多种条件查询缓存结果，支持 list/full 模式 |
 | `tools/vision_export.py` | 批量导出已读图结果为 JSON/CSV，方便外部脚本处理 |
 | `tools/see_window.py` | Windows 屏幕/窗口截图分析（win32gui 枚举窗口 + PIL 截图），复用 vision_read 读图管线 |
 | `tools/_store.py` | 存储抽象层：定义 `VisionStore` 基类，默认 `SQLiteVisionStore` |
@@ -100,7 +122,7 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 
 ## 关键约定
 
-- 只处理 `png/jpg/jpeg/webp/gif/bmp`，单张最大 20MB。
+- 只处理 `png/jpg/jpeg/webp/gif/bmp`，压缩后 payload 最大 20MB（不限制原始文件大小）。
 - `vision_read` 不返回详细内容，强制 LLM 走 `vision_query`。
 - 路径支持绝对路径、相对路径、`~` 用户主目录。
 - 数据库默认放在 AstrBot 数据目录；取不到时 fallback 到插件目录。

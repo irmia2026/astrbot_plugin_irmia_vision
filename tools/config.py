@@ -54,6 +54,9 @@ def _provider_to_vl_config(provider: dict) -> dict:
         "timeout": provider.get("timeout", 120.0),
         "concurrency": _CONFIG.get("vl_model", {}).get("concurrency", 50),
         "max_retries": _CONFIG.get("vl_model", {}).get("max_retries", 2),
+        # detail 与 concurrency/max_retries 一样从全局 vl_model 继承，
+        # 否则走 provider 链时 WebUI 配置的 detail 不生效
+        "detail": _CONFIG.get("vl_model", {}).get("detail", "auto"),
     }
 
 

@@ -108,10 +108,10 @@ vision_read 只负责把图读完存进数据库。
 
 `vision_query` 有两种返回模式：
 
-- **peek 模式**：列表查询（`query`、`filename`、`path`、`recent`），只返回 `result_id`、`filename`、`summary` 三项。适合翻页、筛选、分类。
+- **list 模式**：列表查询（`query`、`filename`、`path`、`recent`），每行只含 `result_id`、`filename`、`peek`（一句话预览）、`question`。适合翻页、筛选、分类。
 - **full 模式**：`result_id` 精确查询，返回完整信息，包括 `path`、`text`、`tags`、`read_at`、`hit_count`。
 
-#### 自然语言搜索（peek）
+#### 自然语言搜索（list）
 
 ```json
 {
@@ -120,7 +120,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 按文件名查询（peek）
+#### 按文件名查询（list）
 
 ```json
 {
@@ -128,7 +128,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 按路径查询（peek）
+#### 按路径查询（list）
 
 ```json
 {
@@ -137,7 +137,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 最近结果（peek）
+#### 最近结果（list）
 
 ```json
 {
@@ -145,7 +145,7 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
-#### 分页（peek）
+#### 分页（list）
 
 ```json
 {
@@ -157,7 +157,7 @@ vision_read 只负责把图读完存进数据库。
 
 #### 查看完整描述（full）
 
-当你从 peek 列表中找到目标结果后，用 `result_id` 查询完整信息：
+当你从 list 列表中找到目标结果后，用 `result_id` 查询完整信息：
 
 ```json
 {
@@ -193,7 +193,7 @@ vision_read 只负责把图读完存进数据库。
 当用户想根据图片内容移动文件时：
 
 1. `vision_read(paths=["/source/folder"], question="判断图片类别：invoice、screenshot、photo、other，并提取关键文字")`
-2. `vision_query(query="invoice")` 用 peek 模式获取发票列表（只含 result_id/filename/summary）。
+2. `vision_query(query="invoice")` 用 list 模式获取发票列表（每行含 result_id/filename/peek）。
 3. 如果数量少，用 `vision_query(result_id="res_xxx")` 逐个确认 full 信息；如果数量多，用 `vision_export(query="invoice")` 导出完整信息（含 path）。
 4. 输出分类 → 文件路径的映射，由外部系统或用户执行移动。
 

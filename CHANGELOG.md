@@ -1,5 +1,39 @@
 # 更新日志
 
+## 1.0.6
+
+### 新增
+
+- **提示词 v3（精简）**：默认读图目标从「为视障人士描述」改为「为智能体提供事实性、可检索的结构化档案」。刻意精简至 ~200 字（v2 曾达 ~700 字）：只保留解析契约（JSON schema）与三条质量护栏（文字逐字原文 / 只依据可见内容、看不清明说 / 中文输出），**不设类型枚举清单**——避免模型被套模板、忽略清单外的细节，描述重点的判断权交给模型。追问模式补充看图素养规则（不编造、原文引用、无法确认明说）。同时降低高并发批量读图的 prompt token 开销。
+- **字段重命名 `summary` → `peek`（一句话预览）**，查询模式 `peek` → `list`（避免与字段撞名）：DB 列自动迁移（`RENAME COLUMN`，老数据保留）、VL 模型 JSON schema、query/export 输出、工具描述全链路同步；旧缓存的 `summary` 键解析兜底兼容。**注意**：导出 CSV 列名随之变化，依赖旧列名的外部脚本需适配。
+- **结构化读图结果**：读图 prompt 要求模型返回 JSON（`peek` 一句话预览/回答 + `text` 完整内容 + `tags` 内容标签），插件容错解析（容忍代码围栏与杂音，失败回退旧「首行预览」行为，读图永不因此失败）。`tags` 字段此前恒为空，现真正填充，搜索质量提升。v4fve 额外附加官方 `response_format`（DeepSeek JSON Output）。
+- **DeepSeek v4fve 官方文档适配**：接入模型为 `deepseek-v4-flash-vision-exp` 时自动触发——压缩长边 2048 → 1024（对齐其服务端 ~800×800 缩放与 384 token/张上限，上传体积省 ~75%）；新增 `detail` 配置项（low/auto/original）透传给支持 detail 的模型。
+- **phash 感知哈希近似缓存命中**：sha256 精确未命中后，自动用已落库的 phash 做近似匹配（同 model + 同 question + 同 detail，汉明距离 ≤ 5）。缩尺/重压缩的同一张图不再重复调用 VL 模型，兑现「甚至被压缩过的同图片也命中缓存」的承诺。近似命中返回 `matched_by` / `phash_distance`，且 `vision_read` 响应透传 `cached_via_phash` 计数与提示。
+- `vision_query` list 模式结果新增 `question` 字段：同一张图的多条不同问题记录可区分（每个 question 独立成行，不会互相覆盖）。
+
+### 修复
+
+- **phash 纯色守卫覆盖候选侧**：此前只拦查询侧，库中已落库的纯色记录（phash 全 0/全 1）仍会作为候选被正常图片误命中；现两侧都过滤。
+- **追问上下文注入位置修正**：`previous_context` 移到 JSON 输出要求之前（此前追加在「不要输出 JSON 以外的任何内容」之后，模型最后看到的不是格式指令）；同时加上限（peek 200 字 / text 1000 字）防超长上文。
+- **JSON 骨架占位符照抄防护**：弱模型可能把 prompt 示例中的占位符原文（如「一句话直接回答」）照抄落库，解析时识别并剔除（含 tags 占位符），按兜底路径处理。
+- **`vision_query` 无参数分支 mode 残留修正**：else 分支误留 `"peek"`，统一为 `"list"`。
+- **批量读图的 `next_call` 不再夹带 `result_id`**：此前批量场景同时给 `recent` + `result_id`，而 `vision_query` 中 `result_id` 优先级最高——agent 被直接带去第一张图的全文，其余图片的预览被跳过。现批量只给 `recent`（list 模式浏览），单图才直接给 `result_id`（full 模式）。
+- **空内容 JSON 不落库**：模型返回纯 tags / 空对象等解析后无实质内容时，视为本次读图失败（计入 failed），不落库——否则空记录会永久占用缓存键，后续命中返回空内容且无失败信号。
+- **detail 纳入缓存键**：detail 是影响模型输入（从而影响输出）的配置维度，此前改 detail 配置后同图同问题会静默命中旧档位缓存。`''` 与 `'auto'` 语义等价互相兼容，老记录不受影响。
+- **`detail=original` 不再被客户端压缩架空**：original 语义为保留原图，现跳过客户端降采样（此前 v4fve 下仍被压到 1024，see_window 读屏小字场景最受其害）。
+- **detail 配置经 provider 降级链继承**：`_provider_to_vl_config` 与 concurrency/max_retries 同一模式从全局 vl_model 继承 detail（此前走下拉框链路配 detail 不生效）。
+- **detail 枚举归一化**：strip + 小写 + 白名单校验，非法值告警并回退 auto（此前乱配会原样发给 API 导致 400；跨 provider 语义差异：OpenAI 认 high / DeepSeek 认 original）。
+- **see_window 禁用 phash 近似兜底**：实测同一 IDE 窗口代码全换后 phash 距离仅 0-4（≤5 必误判），近似命中会返回过期屏幕描述；现 see_window 走 `allow_phash=False`（sha256 精确命中保留）。
+- **纯色/低信息图片跳过 phash 兜底**：此类 phash 趋同（白/红/蓝/灰两两距离 0-1），置 1 比特 <4 或 >60 直接不匹配。
+- **phash 兜底改两阶段查询**：先轻列扫描候选再取最佳行，避免把 result_json/text 重列全拉内存并持锁。
+- **`_ensure_conn` 重连补全初始化**：close 后重连不再丢失 `check_same_thread=False`、PRAGMA（synchronous/busy_timeout）与 SCHEMA/迁移——统一走 `_connect()` 复用（此前潜伏的跨线程 ProgrammingError 排雷）。
+- **vision_query / vision_export 的 DB 调用补 offload**：与 vision_read 一致移出事件循环。
+- **压缩后超限的错误不再重试/降级**：新增 `ImageTooLargeError`（ValueError 子类），超限即直接失败——此前会在全链路上重试 (retries+1)×链长 次且每次重新压缩。
+- **插件专用线程池**：`run_sync` 从共享默认 executor 改为 `irmia_vision` 命名线程池（≤8 线程），批量读图不再饿死宿主的其他 offload 任务。
+- **see_window 截图缓存永远 miss**：截图文件名带微秒时间戳，而缓存键含 filename 维度，导致同一画面每次截图都重复调用 VL 模型。缓存键改为 `(sha256, model_id, question)` 纯内容寻址，与文件名无关；filename 仍落库供查询展示。
+- **20MB 大小限制误杀大图**：原检查按原始文件字节数在压缩前拦截，25MB 的照片压缩后仅 1-2MB 却被拒绝。大小检查移到 `_compress_image` 压缩结果上，不再限制原始文件；同时删除 `vision_read` 中的重复前置检查。
+- **批量读图冻结 AstrBot 事件循环**：`sha256_of_file` / `find_cached` / `insert` / `get_by_result_id` / `_compute_phash` 及 VL 调用内的 `encode_image` 全部是事件循环上的同步 I/O，实测 100 张图造成 5.6 秒连续冻结。现统一通过 `run_sync()` offload 到线程池（同步修复 `run_sync` 弃用的 `get_event_loop` 并真正启用它），同场景最长停滞降至 ~17ms。`SQLiteVisionStore` 相应增加 `threading.RLock` 串行化跨线程访问。
+
 ## 1.0.5
 
 ### 新增

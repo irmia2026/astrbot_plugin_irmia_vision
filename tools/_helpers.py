@@ -7,7 +7,16 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+
+# 插件专用线程池：不用共享默认 executor，
+# 避免批量读图时 sha256/phash/压缩任务饿死宿主（AstrBot）的其他 offload 任务。
+_EXECUTOR = ThreadPoolExecutor(
+    max_workers=min(8, (os.cpu_count() or 4) + 4),
+    thread_name_prefix="irmia_vision",
+)
 
 
 def unwrap(result: Any) -> str:
@@ -46,6 +55,6 @@ def proposal_reply(
 
 
 async def run_sync(fn, *args, **kwargs):
-    """在事件循环中运行同步函数。"""
-    loop = asyncio.get_event_loop()
-    return loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
+    """把同步函数 offload 到插件专用线程池，避免阻塞事件循环。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))

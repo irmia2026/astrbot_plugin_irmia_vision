@@ -5,34 +5,50 @@ vision_read — 批量读图并落库
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import uuid
 from pathlib import Path
 
 from astrbot.api import logger
 from PIL import Image
 
-from ._helpers import proposal_reply
+from ._helpers import proposal_reply, run_sync
 from ._store import VisionStore
-from ._vl_client import MAX_IMAGE_SIZE, read_image as vl_read_image
+from ._vl_client import ImageTooLargeError, normalize_detail, read_image as vl_read_image
 from .config import resolve_provider_chain
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+# v3 提示词：刻意精简。只保留解析契约（JSON schema）与三条质量护栏
+# （原文提取 / 不猜测 / 中文），把描述重点的判断权交给模型，
+# 避免类型枚举清单把模型注意力锚死在清单内维度、忽略清单外的细节。
+# JSON 契约放在独立后缀：追问上下文注入在 base 与 suffix 之间，
+# 保证任何路径下模型最后看到的都是格式要求（previous_result_id 无 question 路径也一样）。
 DEFAULT_PROMPT = (
-    "你是一位专业的视觉描述者，正在为一位视力障碍人士描述图片。"
-    "请用自然流畅的中文段落，客观、生动地描述图片内容。"
-    "包括：整体场景与背景、主要主体的外观/姿态/表情、空间布局（左、右、前景、背景）、"
-    "光线（光源、对比、阴影）、色调与整体氛围。"
-    "请逐字读出图中所有可见文字。"
-    "严格基于可见内容进行描述，不要猜测。"
-    "最后用 2-3 句话总结图片的主题或隐含叙事。"
+    "请基于图片内容给出结构化描述。"
+    "图中文字/数字逐字保留原文（不翻译不纠错）；只依据可见内容，"
+    "看不清的部分写「看不清」；正文用中文。"
+)
+STRUCTURED_SUFFIX_DEFAULT = (
+    "\n\n输出 JSON（json）："
+    '{"peek": "一句话预览：这是什么图+最值得注意的信息", '
+    '"text": "详细描述：你注意到的一切，按图片类型自行决定重点'
+    '（如截图重在界面文字与状态、票据重在关键字段数值）", '
+    '"tags": ["3-6个中文检索标签"]}。'
+    "不要输出 JSON 以外的任何内容。"
 )
 
-
-def _check_image_size(path: str) -> None:
-    size = os.path.getsize(path)
-    if size > MAX_IMAGE_SIZE:
-        raise ValueError(f"图片 {path} 大小超过 20MB 限制")
+# 结构化输出：要求模型返回 JSON（peek/text/tags），插件容错解析。
+# prompt 中必须含 "json" 字样（DeepSeek JSON Output 的官方要求）。
+STRUCTURED_SUFFIX_QUESTION = (
+    "\n\n仅依据图片可见内容回答（文字/数字逐字引用原文；无法确认就明说），"
+    "回答语言用中文。输出 JSON（json）："
+    '{"peek": "一句话直接回答", '
+    '"text": "完整回答与依据", '
+    '"tags": ["3-6个检索标签"]}。'
+    "不要输出 JSON 以外的任何内容。"
+)
 
 
 def _collect_image_paths(paths: list[str]) -> list[str]:
@@ -66,11 +82,59 @@ def _compute_phash(path: str) -> str:
         return ""
 
 
+def _extract_json(text: str) -> dict | None:
+    """从模型输出中提取 JSON 对象：容忍 ```json 围栏和前后杂音。"""
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+# 提示词中 JSON 骨架的示例值——弱模型可能照抄占位符原文落库，解析时识别并剔除
+_PLACEHOLDER_VALUES = frozenset({
+    "一句话预览：这是什么图+最值得注意的信息",
+    "一句话直接回答",
+    "详细描述：你注意到的一切，按图片类型自行决定重点（如截图重在界面文字与状态、票据重在关键字段数值）",
+    "完整回答与依据",
+    "3-6个中文检索标签",
+    "3-6个检索标签",
+})
+
+
 def _parse_result(raw: str) -> dict:
-    summary = raw.strip().split("\n")[0] if raw.strip() else ""
+    """解析 VL 返回：优先按结构化 JSON（peek/text/tags）解析，
+    模型不遵守格式时回退到「首行作为预览」的旧行为，读图永不因解析失败而失败。
+    兼容旧缓存：读取时 peek 优先，summary 兜底（老记录/老模型输出的字段名）。"""
+    text = raw.strip()
+    data = _extract_json(text)
+    if data is not None:  # 含空对象 {}：走结构化分支返回空字段，避免兜底把 JSON 原文当预览
+        peek = str(data.get("peek") or data.get("summary") or "").strip()
+        body = str(data.get("text") or "").strip()
+        # 占位符被原样照抄时视为无内容，回退处理
+        if peek in _PLACEHOLDER_VALUES:
+            peek = ""
+        if body in _PLACEHOLDER_VALUES:
+            body = ""
+        tags_raw = data.get("tags")
+        tags = [str(t).strip() for t in tags_raw if str(t).strip()] if isinstance(tags_raw, list) else []
+        tags = [t for t in tags if t not in _PLACEHOLDER_VALUES]  # 剔除照抄的占位符标签
+        if peek or body:
+            return {
+                "peek": (peek or body.split("\n")[0])[:200],
+                "text": body or peek,
+                "tags": tags,
+            }
+        # 提取到了 JSON 但无实质内容（如只有 tags）：返回空字段，
+        # 避免兜底路径把 JSON 原文第一行当预览落库
+        return {"peek": "", "text": "", "tags": tags}
+    peek = text.split("\n")[0] if text else ""
     return {
-        "summary": summary[:200],
-        "text": raw.strip(),
+        "peek": peek[:200],
+        "text": text,
         "tags": [],
     }
 
@@ -96,6 +160,7 @@ async def read(
     question: str = "",
     force_reread: bool = False,
     previous_result_id: str = "",
+    allow_phash: bool = True,
 ) -> dict:
     image_paths = _collect_image_paths(paths)
     if not image_paths:
@@ -104,8 +169,11 @@ async def read(
             "未找到任何支持的图片文件。请确认路径存在，并且包含 png/jpg/jpeg/webp/gif/bmp 格式的图片。",
             options=["检查路径是否正确", "使用 vision_query 查看已有结果"],
         )
+    # 默认/追问模式都有 JSON 契约后缀：追问上下文注入在 base 与 suffix 之间，
+    # 保证任何路径下模型最后看到的都是格式要求
+    base_prompt = question if question else DEFAULT_PROMPT
+    prompt_suffix = STRUCTURED_SUFFIX_QUESTION if question else STRUCTURED_SUFFIX_DEFAULT
 
-    prompt = question if question else DEFAULT_PROMPT
     # 不在此处拦截空链：命中缓存（此前已读过的图）不需要 VL 模型配置。
     # 只有存在未命中、需要调用模型的路径才要求 chain 非空（见 _read_one）。
     chain = resolve_provider_chain()
@@ -114,12 +182,15 @@ async def read(
     max_retries = max(0, int((primary or {}).get("max_retries", 2)))
     # 用降级链中最大的 timeout 构建共享 client，避免 fallback 被 primary 的短 timeout 截断
     vl_timeout = max(float(cfg.get("timeout", 120.0)) for cfg in chain) if chain else 120.0
+    # detail 影响模型实际输入（从而影响输出），是缓存键的一部分
+    cache_detail = normalize_detail((primary or {}).get("detail", "auto"))
 
     previous_result = None
     if previous_result_id:
-        previous_result = db.get_by_result_id(previous_result_id)
+        previous_result = await run_sync(db.get_by_result_id, previous_result_id)
 
     cached_count = 0
+    phash_cached_count = 0
     read_count = 0
     failed_count = 0
     failed_paths: list[str] = []
@@ -132,11 +203,12 @@ async def read(
     _httpx_client = httpx.AsyncClient(timeout=vl_timeout, limits=limits)
 
     async def _read_one(path: str) -> None:
-        nonlocal cached_count, read_count, failed_count, first_result_id, last_result_id
+        nonlocal cached_count, phash_cached_count, read_count, failed_count, first_result_id, last_result_id
 
         try:
             filename = os.path.basename(path)
-            sha256 = db.sha256_of_file(path)
+            # sha256 / phash / SQLite 均为同步 I/O，offload 到线程池避免阻塞事件循环
+            sha256 = await run_sync(db.sha256_of_file, path)
 
             is_follow_up = False
             previous_context = ""
@@ -144,20 +216,36 @@ async def read(
                 prev_sha256 = previous_result.get("sha256", "")
                 if prev_sha256 and prev_sha256 == sha256:
                     is_follow_up = True
-                    previous_summary = previous_result.get("summary", "")
-                    previous_text = previous_result.get("text", "")
-                    previous_context = f"\n之前对这张图的理解：{previous_summary}\n提取的文字：{previous_text}\n"
+                    previous_peek = (previous_result.get("peek", "") or previous_result.get("summary", ""))[:200]
+                    previous_text = previous_result.get("text", "")[:1000]  # 上限防超长上文
+                    previous_context = f"\n之前对这张图的理解：{previous_peek}\n提取的文字：{previous_text}\n"
 
             cached = None
             if not is_follow_up and not force_reread:
-                cached = db.find_cached(sha256, filename, (primary or {}).get("model", ""), question)
+                # 缓存按内容寻址（sha256），不含文件名：see_window 的时间戳截图也能命中
+                cached = await run_sync(db.find_cached, sha256, (primary or {}).get("model", ""), question, cache_detail)
             if cached:
                 cached_count += 1
                 return
 
-            _check_image_size(path)
-            phash = _compute_phash(path)
-            final_prompt = prompt + previous_context if previous_context else prompt
+            phash = await run_sync(_compute_phash, path)
+
+            # allow_phash=False（如 see_window）：屏幕内容时刻在变，近似命中会返回过期描述，禁用兜底
+            if allow_phash and not is_follow_up and not force_reread and phash:
+                # sha256 精确未命中 → phash 近似兜底：缩尺/重压缩的同图也能命中
+                cached = await run_sync(
+                    db.find_cached_by_phash, phash, (primary or {}).get("model", ""), question, cache_detail
+                )
+                if cached:
+                    cached_count += 1
+                    phash_cached_count += 1
+                    logger.info(
+                        f"phash 近似命中 {path} → {cached.get('result_id')} "
+                        f"(distance={cached.get('phash_distance')})"
+                    )
+                    return
+
+            final_prompt = base_prompt + previous_context + prompt_suffix
 
             if not chain:
                 raise ValueError(
@@ -166,6 +254,7 @@ async def read(
 
             raw = ""
             used_model = ""
+            used_detail = cache_detail
             last_err: Exception | None = None
             for vl_cfg in chain:
                 if not vl_cfg.get("api_key"):
@@ -173,10 +262,13 @@ async def read(
                 for attempt in range(max_retries + 1):
                     async with semaphore:
                         try:
-                            raw = await vl_read_image(path, final_prompt, client=_httpx_client, vl_config=vl_cfg)
+                            raw = await vl_read_image(path, final_prompt, client=_httpx_client, vl_config=vl_cfg, json_mode=True)
                             last_err = None
                             used_model = vl_cfg.get("model", "unknown")
+                            used_detail = normalize_detail(vl_cfg.get("detail", "auto"))
                             break
+                        except ImageTooLargeError:
+                            raise  # 压缩后仍超限：重试/降级结果都一样，直接失败不放大
                         except Exception as e:
                             last_err = e
                     if last_err is None:
@@ -196,9 +288,15 @@ async def read(
                 raise ValueError("所有 VL 模型均返回空内容，无法读图")
 
             parsed = _parse_result(raw)
+            if not parsed["peek"] and not parsed["text"]:
+                # 模型返回了空内容 JSON（如 {"tags": [...]} / {}）：
+                # 视为本次读图失败，不落库——否则空记录会永久占用缓存键，
+                # 后续命中返回空内容且 agent 无任何失败信号
+                raise ValueError(f"模型返回内容结构化解析后为空: {raw[:100]}")
             result_id = f"res_{uuid.uuid4().hex[:12]}"
 
-            db.insert(
+            await run_sync(
+                db.insert,
                 sha256=sha256,
                 filename=filename,
                 phash=phash,
@@ -206,15 +304,16 @@ async def read(
                 question=question,
                 result_id=result_id,
                 source_value=path,
-                summary=parsed["summary"],
+                peek=parsed["peek"],
                 text=parsed["text"],
                 tags=parsed["tags"],
                 result_json={
-                    "summary": parsed["summary"],
+                    "peek": parsed["peek"],
                     "text": parsed["text"],
                     "tags": parsed["tags"],
                     "raw": raw,
                 },
+                detail=used_detail,
             )
             read_count += 1
             if not first_result_id:
@@ -260,11 +359,12 @@ async def read(
 
     next_args: dict = {}
     if first_result_id and last_result_id and first_result_id == last_result_id:
+        # 单图：目标明确，直接 full 查这条
         next_args = {"result_id": first_result_id}
     else:
+        # 批量：只给 recent（list 模式浏览全部预览），不夹带 result_id——
+        # 否则 vision_query 里 result_id 优先级最高，会直接 full 第一张而跳过其余
         next_args = {"recent": min(len(image_paths), 10)}
-        if first_result_id:
-            next_args["result_id"] = first_result_id
 
     reply = {
         "ok": True,
@@ -281,6 +381,13 @@ async def read(
     }
     if result_id_hint:
         reply["result_id_hint"] = result_id_hint
+    if phash_cached_count > 0:
+        # 近似命中透明化：调用方（LLM）应知道这些结果是「相似图」的缓存而非精确同图
+        reply["cached_via_phash"] = phash_cached_count
+        reply["phash_note"] = (
+            f"其中 {phash_cached_count} 条命中的是感知哈希近似缓存（缩尺/重压缩的同图），"
+            "内容可能与原图存在细微差异；如需精确结果请用 force_reread 重读。"
+        )
     if failed_paths:
         reply["failed_paths"] = failed_paths
 

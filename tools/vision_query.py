@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 
 from ._store import VisionStore
-from ._helpers import proposal_reply
+from ._helpers import proposal_reply, run_sync
 
 
 async def query(
@@ -24,24 +24,24 @@ async def query(
     max_offset = max(0, offset)
 
     if result_id:
-        row = db.get_by_result_id(result_id)
+        row = await run_sync(db.get_by_result_id, result_id)
         results = [row] if row else []
         mode = "full"
     elif filename:
-        results = db.get_by_filename(filename, limit=max_limit, offset=max_offset)
-        mode = "peek"
+        results = await run_sync(db.get_by_filename, filename, limit=max_limit, offset=max_offset)
+        mode = "list"
     elif path:
-        results = db.get_by_path(path, limit=max_limit, offset=max_offset)
-        mode = "peek"
+        results = await run_sync(db.get_by_path, path, limit=max_limit, offset=max_offset)
+        mode = "list"
     elif query:
-        results = db.search(query, limit=max_limit, offset=max_offset)
-        mode = "peek"
+        results = await run_sync(db.search, query, limit=max_limit, offset=max_offset)
+        mode = "list"
     elif recent > 0:
-        results = db.get_recent(limit=min(max(0, recent), max_limit), offset=max_offset)
-        mode = "peek"
+        results = await run_sync(db.get_recent, limit=min(max(0, recent), max_limit), offset=max_offset)
+        mode = "list"
     else:
         results = []
-        mode = "peek"
+        mode = "list"
 
     cleaned = []
     for r in results:
@@ -50,7 +50,9 @@ async def query(
         item = {
             "result_id": r.get("result_id", ""),
             "filename": r.get("filename", ""),
-            "summary": r.get("summary", ""),
+            "peek": r.get("peek", "") or r.get("summary", ""),
+            # 同一张图可能有多条不同 question 的记录，透出 question 让 LLM 能区分
+            "question": r.get("question", ""),
         }
         if mode == "full":
             tags_raw = r.get("tags", "[]")

@@ -23,7 +23,7 @@ async def _run_query_by_result_id(tmp_path):
             question="",
             result_id="res_q",
             source_value="/tmp/a.png",
-            summary="summary",
+            peek="peek-summary",
             text="text content",
             tags=["tag1"],
             result_json={},
@@ -59,7 +59,7 @@ async def _run_query_list(tmp_path):
             question="",
             result_id="res_invoice",
             source_value="/tmp/invoice.png",
-            summary="invoice summary",
+            peek="invoice preview",
             text="invoice text content",
             tags=["invoice"],
             result_json={},
@@ -74,10 +74,10 @@ async def _run_query_list(tmp_path):
 def test_vision_query_list_returns_peek_only(tmp_path):
     result = asyncio.run(_run_query_list(tmp_path))
     assert result["ok"] is True
-    assert result["mode"] == "peek"
+    assert result["mode"] == "list"
     assert result["total"] == 1
     item = result["results"][0]
-    assert set(item.keys()) == {"result_id", "filename", "summary"}
+    assert set(item.keys()) == {"result_id", "filename", "peek", "question"}
 
 
 async def _run_query_empty(tmp_path):
@@ -111,7 +111,7 @@ async def _run_query_pagination(tmp_path):
                 question="",
                 result_id=f"res_{i}",
                 source_value=f"/tmp/img{i}.png",
-                summary=f"summary {i}",
+                peek=f"preview {i}",
                 text="text",
                 tags=[],
                 result_json={},
