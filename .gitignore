@@ -8,6 +8,9 @@ venv/
 *.db
 .DS_Store
 .reasonix/
+.codegraph/
+*.db-shm
+*.db-wal
 data/
 irmia_eyes.zip
 vision_export_*.json
