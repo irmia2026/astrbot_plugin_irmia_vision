@@ -464,6 +464,71 @@ def test_empty_structured_content_not_stored(tmp_path):
     asyncio.run(_run())
 
 
+def test_cached_hit_next_call_points_to_cached_record(tmp_path):
+    """缓存命中的 next_call 必须指向命中的记录本身（result_id 精确查）——
+    旧逻辑退化成 recent=1，指向库中最新记录（可能是完全无关的图），污染上下文。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    img = tmp_path / "target.png"
+    _make_test_image(str(img))
+    # 先插目标记录（待命中）
+    db.insert(
+        sha256=db.sha256_of_file(str(img)), filename="target.png", phash="",
+        model_id="fake-vl", question="", result_id="res_target", source_value=str(img),
+        peek="目标图", text="目标", tags=[], result_json={},
+    )
+    # 后插无关记录——recent=1 必然指向它（旧逻辑的错误落点）
+    other = tmp_path / "z_other.png"
+    _make_test_image(str(other), size=(830, 620))
+    db.insert(
+        sha256=db.sha256_of_file(str(other)), filename="z_other.png", phash="",
+        model_id="fake-vl", question="", result_id="res_other", source_value=str(other),
+        peek="无关图", text="无关", tags=[], result_json={},
+    )
+
+    async def _run():
+        return await vision_read.read(db, paths=[str(img)])
+
+    result = asyncio.run(_run())
+    assert result["cached"] == 1
+    assert result["read"] == 0
+    assert result["next_call"]["arguments"] == {"result_id": "res_target"}
+    assert "res_target" in result["result_id_hint"]
+    assert "命中结果" in result["result_id_hint"]  # 纯命中场景的文案不是「新结果」
+    db.close()
+
+
+def test_phash_hit_next_call_points_to_similar_record(tmp_path):
+    """phash 近似命中同样登记 result_id：next_call 指向相似图的记录。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    orig_path = str(tmp_path / "orig.png")
+    img = _make_test_image(orig_path)
+    import imagehash
+    from PIL import Image
+
+    with Image.open(orig_path) as _im:
+        phash = str(imagehash.phash(_im))
+    db.insert(
+        sha256=db.sha256_of_file(orig_path), filename="orig.png",
+        phash=phash, model_id="fake-vl", question="", result_id="res_orig",
+        source_value=orig_path, peek="原图", text="原图描述", tags=[], result_json={},
+    )
+    # 缩尺变体（sha256 不同，phash 近似）
+    img.resize((400, 300)).save(tmp_path / "resized.png")
+
+    async def _run():
+        return await vision_read.read(db, paths=[str(tmp_path / "resized.png")])
+
+    result = asyncio.run(_run())
+    assert result["cached"] == 1
+    assert result.get("cached_via_phash") == 1
+    assert result["next_call"]["arguments"] == {"result_id": "res_orig"}
+    db.close()
+
+
 def test_image_too_large_falls_back_to_smaller_edge_provider(tmp_path):
     """混合链 [非DS主, DS备]：主档位（2048）超限不掐死 fallback——
     DS 备用的 1024 档可能通过（独立审查发现：原「重试/降级都一样」注释不成立）。"""

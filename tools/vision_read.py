@@ -241,6 +241,13 @@ async def read(
                 # 缓存按内容寻址（sha256），不含文件名：see_window 的时间戳截图也能命中
                 cached = await run_sync(db.find_cached, sha256, (primary or {}).get("model", ""), question, cache_detail)
             if cached:
+                # 命中路径也要登记 result_id：否则单图命中时 next_call 退化成
+                # {"recent": 1} 指向库中最新记录（可能是完全无关的图），污染 agent 上下文
+                rid = cached.get("result_id", "")
+                if rid:
+                    if not first_result_id:
+                        first_result_id = rid
+                    last_result_id = rid
                 cached_count += 1
                 return
 
@@ -253,6 +260,13 @@ async def read(
                     db.find_cached_by_phash, phash, (primary or {}).get("model", ""), question, cache_detail
                 )
                 if cached:
+                    # 同精确命中：登记 result_id。此时指向「相似图」记录，
+                    # 配套的 phash_note 已在响应中提示差异，语义自洽
+                    rid = cached.get("result_id", "")
+                    if rid:
+                        if not first_result_id:
+                            first_result_id = rid
+                        last_result_id = rid
                     cached_count += 1
                     phash_cached_count += 1
                     logger.info(
@@ -386,10 +400,12 @@ async def read(
 
     result_id_hint = ""
     if first_result_id and last_result_id:
+        # 纯命中场景不是「新结果」，文案区分避免误导
+        label = "新结果" if read_count > 0 else "命中结果"
         if first_result_id == last_result_id:
-            result_id_hint = f"新结果 result_id: {first_result_id}"
+            result_id_hint = f"{label} result_id: {first_result_id}"
         else:
-            result_id_hint = f"新结果 result_id 范围: {first_result_id} ~ {last_result_id}"
+            result_id_hint = f"{label} result_id 范围: {first_result_id} ~ {last_result_id}"
 
     next_args: dict = {}
     if first_result_id and last_result_id and first_result_id == last_result_id:
