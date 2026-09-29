@@ -3,13 +3,61 @@
 纯逻辑部分（系统窗口过滤、窗口匹配）不依赖真实显示环境，可直接单测。
 """
 
+import os
+
 import pytest
 
 from tools.see_window import (
     DEFAULT_SCREEN_PROMPT,
+    _cleanup_old_screenshots,
     _is_system_window,
     _pick_window,
 )
+
+
+class TestScreenshotCleanup:
+    """截图临时目录滚动清理（磁盘泄漏防护）"""
+
+    def test_keeps_only_latest_n(self, tmp_path):
+        d = str(tmp_path)
+        for i in range(55):
+            # 文件名带时间戳，按名称排序即时间序
+            open(os.path.join(d, f"see_window_2026092{i:02d}_000000_000000.png"), "w").close()
+        open(os.path.join(d, "other_file.txt"), "w").close()  # 非截图文件不动
+
+        _cleanup_old_screenshots(d, keep=50)
+
+        remaining = os.listdir(d)
+        shots = [f for f in remaining if f.startswith("see_window_")]
+        assert len(shots) == 50
+        assert "other_file.txt" in remaining
+        # 删的是最旧的 5 张，最新的保留
+        assert "see_window_202609254_000000_000000.png" in remaining
+        assert "see_window_202609200_000000_000000.png" not in remaining
+
+    def test_fewer_than_keep_is_noop(self, tmp_path):
+        d = str(tmp_path)
+        for i in range(3):
+            open(os.path.join(d, f"see_window_2026092{i:02d}_000000_000000.png"), "w").close()
+        _cleanup_old_screenshots(d, keep=50)
+        assert len(os.listdir(d)) == 3
+
+    def test_missing_dir_is_silent(self):
+        _cleanup_old_screenshots("Z:/nonexistent_dir_irmia_xxx")  # 不拋异常
+
+    def test_exactly_keep_is_noop(self, tmp_path):
+        d = str(tmp_path)
+        for i in range(50):
+            open(os.path.join(d, f"see_window_2026092{i:02d}_000000_000000.png"), "w").close()
+        _cleanup_old_screenshots(d, keep=50)
+        assert len(os.listdir(d)) == 50
+
+    def test_keep_zero_removes_all(self, tmp_path):
+        d = str(tmp_path)
+        for i in range(3):
+            open(os.path.join(d, f"see_window_2026092{i:02d}_000000_000000.png"), "w").close()
+        _cleanup_old_screenshots(d, keep=0)
+        assert [f for f in os.listdir(d) if f.startswith("see_window_")] == []
 
 
 class TestIsSystemWindow:

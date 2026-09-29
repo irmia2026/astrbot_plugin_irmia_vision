@@ -112,5 +112,10 @@ async def _run_export_default_path(tmp_path):
 
 def test_vision_export_default_path(tmp_path):
     result = asyncio.run(_run_export_default_path(tmp_path))
-    assert result["ok"] is True
-    assert os.path.exists(result["output_path"])
+    try:
+        assert result["ok"] is True
+        assert os.path.exists(result["output_path"])
+    finally:
+        # 默认路径写在 cwd（项目根），必须清理——否则每次测试都在仓库里留残留文件
+        if os.path.exists(result["output_path"]):
+            os.remove(result["output_path"])

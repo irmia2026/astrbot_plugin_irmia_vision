@@ -1,5 +1,71 @@
 # 更新日志
 
+## 1.1.4
+
+### 修复
+
+- **`reasoning_effort` 参数形态错误（独立审查发现）**：此前嵌套进 `thinking` 对象发送（`{"thinking": {"reasoning_effort": ...}}`），而 DeepSeek 官方形态是**顶层参数** `reasoning_effort`（thinking 对象仅含 type；API 参考页 DOM 层级 + 思考模式指南 + SDK 示例三重印证）——嵌套形态会被服务端静默忽略，思考强度配置（low 省钱防截断 / none 关闭思考）全部落空。已改为顶层发送。
+- **跨 provider `detail` 方言映射（`provider_detail`）**：白名单是两家并集，`original` 原样发给 OpenAI（只认 low/high/auto）会 400。现发送侧按 provider 映射：original→OpenAI 发 `high`（精细档，最接近保留原图语义）、high→DeepSeek 发 `original`（官方等价）。压缩档位仍按用户原始档位计算（original=保留原图），缓存键不受发送侧映射影响。
+- **文档三处硬不一致**：ARCHITECTURE「四个工具」→ 五个（1.1.0 遗留，含数据流图补 compare/see_window 路径）；registry 的 output_path 描述「插件目录下 exports/」→ 实际写当前工作目录（README 原本就对）；SKILL.md 批量示例 next_call 同时给 result_id+recent → 两条路径互斥不可能产出此组合（与 CHANGELOG 1.0.6 条目自相矛盾），修为只给 recent。README 删除无正文的重复「推荐方式」标题；SKILL 补充 max_batch 上限提示。
+- **`target_edge_for_model` 注释 800×800 残留**：与现行文档（1300×1300）及本文件头注释自相矛盾，更正。
+- **`ImageTooLargeError` 不再短路降级链（独立审查发现）**：原注释「重试/降级结果都一样」在混合档位链下不成立——压缩档位按模型类型分档（非 DS 2048 / DS 1024），compare 场景 16 张 2048 档大图可破 40MB 内联预算，而 DS 备用的 1024 档本可通过，首次异常即返回把 fallback 掐死。现与 OutputTruncatedError 同语义：同 provider（同档位）重试无意义，但降级到更小档位的模型可能通过。
+- **`max_retries`/`concurrency` 整数归一**：与 `_safe_timeout` 同一模式加 `_safe_int`——手编 config.json 写入 "abc"/null 时，下游 `int()` 穿透成不透明的「工具执行失败」，无法定位。provider 链继承与 vl_model 回退分支均归一。
+- **`reasoning_effort` 别名补 `ultra→max`**：思考模式指南映射表有此行（API 参考页未列）。客户端映射后发送值恒在合法枚举内，比透传 ultra（遇严格校验有 400 风险）更稳。
+
+### 测试
+
+- conftest 增加 autouse fixture 每测试后重置 tool_config 全局状态（机制保障，不靠纪律维持）；export 默认路径测试清理 cwd 残留文件。
+- 新增覆盖：`partial` 状态（部分成功部分失败）、max_batch 等值放行边界、ImageTooLargeError 两侧（read 不重试 / compare 提案）、截图清理边界（恰好 keep 张、keep=0）、reasoning_effort=none + json_mode 组合、provider_detail 映射。
+
+## 1.1.3
+
+### 新增
+
+- **`reasoning_effort` 思考强度配置（DeepSeek 官方参数，默认 `low`）**：仅对 deepseek-flash / v4fve 附加 `thinking` 字段（其他 provider 不识别会 400，不附加）。读图是感知任务，`low` 足够——思维链 token 大减，截断风险、费用、延迟同步下降；`none` 完全关闭思考（此时 max_tokens 基线不抬升，`high`/`max` 可用）。官方别名映射（minimal→low、medium/xhigh→high），非法值回退 low。provider 降级链与 detail 同一模式继承全局配置。
+- **截断日志带 `usage`**：`finish_reason=length` 的告警与 `OutputTruncatedError` 现在携带 `completion_tokens` / `reasoning_tokens`——思维链吃了多少额度一目了然，截断排障的关键证据。
+
+### 修复（对齐 DeepSeek/OpenAI 官方行为）
+
+- **`detail=low` 客户端对齐 512**：两家服务商 low 档都是缩到 512×512，此前客户端仍压 1024/2048——更大输入无收益只费带宽，现对齐。
+- **DeepSeek 的 `detail=high` 视同 `original`**：官方文档明确 high 等价 original（保留原图），此前走压缩档名不副实；现 DeepSeek 系 high 跳过客户端降采样（OpenAI 的 high 是自带缩放的精细档，仍压 2048 对齐）。
+
+## 1.1.2
+
+### 新增
+
+- **批量读图账单保险丝 `max_batch`（默认 2000）**：误传大目录（如整个盘符）时超过上限直接报错并提示分批——批量读图按张调用 VL 模型计费，此前无任何失控防护。支持 WebUI 配置；非法值/0/负数回退默认。
+- **重试/降级链的编码复用**：`read_image` / `read_images` 新增 `image_url(s)` 预编码参数，vision_read / vision_compare 在 (retries+1)×链长 的调用循环内按压缩档位复用同一编码结果——同一张图的压缩+base64 只做一次（多图对比场景的重复压缩浪费不再被图片数放大）。
+- **see_window 截图滚动清理**：`data/temp/tool_images/` 只保留最近 50 张（此前永久累积，磁盘泄漏）；清理失败静默，不影响截图主流程。
+
+### 修复
+
+- **`hit_count` 语义纯净**：`get_by_result_id` 查看不再 +1——「查询查看」此前被记入「缓存命中」，把 search 的 `hit_count DESC` 排序与 vision_query 展示的命中数刷得失真。现 hit_count 只统计真缓存命中（find_cached / find_cached_by_phash）。
+- **vision_query full 模式 text 截断 2000 → 4000**：与 vision_compare 直返上限对齐，同一记录在两个入口完整度一致。
+- **`_conf_schema.json` 运行时改写减噪**：options/labels 与已有值相同时不再触碰文件（此前每次启动都写，provider 列表不变也污染 git 工作区）；写入改为临时文件 + `os.replace` 原子替换（避免崩溃把 schema 截断成半个 JSON）。首次运行或 provider 列表变化时仍会写入——这是 AstrBot 下拉框注入的机制限制，无法根除。
+
+### 文档
+
+- README 补充：GIF 动图只读取第一帧（动画内容不会被完整理解）；`max_batch` 配置项说明。
+
+## 1.1.1
+
+### 修复
+
+- **DeepSeek 思考模式「返回思考内容且截断」**：根因三连——(1) `read_image` 硬编码 `max_tokens=4096`，而 DeepSeek 思考模式默认开启（`reasoning_effort=high`），**思维链与答案共享 max_tokens 额度**（官方未设置时思考模式默认 64K），思考链经常吃掉全部 4096 额度；(2) 代码从不检查 `finish_reason`，截断毫无信号；(3) 1.0.5 的 `reasoning_content` 回退无条件生效——`content` 空时把**被截断的思维链**当答案返回并落库。修复：`finish_reason=length`（含 content 非空的半截 JSON）时放大额度单次重试（2 倍、封顶 16384，DeepSeek 上限 384K）；放大后仍截断抛 `OutputTruncatedError` 并落为 failed（**截断内容不再落库**）；`reasoning_content` 回退收紧到仅非截断场景（兼容某些网关）。
+- **思考型模型 `max_tokens` 基线抬升**：`is_v4fve` 命中的模型基线 `max(配置值, 8192)`，从源头减少截断触发。
+- **`is_v4fve` 适配现行模型名 `deepseek-flash`**：旧名 `deepseek-v4-flash-vision-exp` 已下线、请求由 flash 承接，但此前只匹配旧名——配置新名的用户丢失 1024 压缩档、`response_format` JSON Output 与基线抬升全部优化。同时更正注释中过时的服务端缩放参数（800×800/384 token → 1300×1300/1024 token，据现行官方文档）。
+- **截断错误的降级语义**：`OutputTruncatedError` 在同一 provider 上不重试（额度已内部放大），但会降级到下一个 provider——截断是模型相关的，换非思考型模型可能成功（vision_read / vision_compare 一致）。
+- **provider `timeout` 健壮性**：AstrBot provider_config 中 timeout 为字符串/None/非法值时，下游 `float()` / httpx 直接异常；现统一 `_safe_timeout` 归一化（含 vl_model 手动配置回退分支），非法值告警并回退 120s。
+
+## 1.1.0
+
+### 新增
+
+- **`vision_compare` 工具：多图对比询问**。整组图片在**同一次 VL 请求**中发送（DeepSeek 多图契约：多个 image_url 块放同一条 user 消息，每图独立计费 ≤1024 token）——模型同时看到全部图才能做跨图判断，优于逐张读取后由 LLM 自己拼结论。图片间插入「图1/图2（文件名）」文本标记，模型回答可引用具体图片。结论**直接返回**（peek + text≤4000 字 + tags）并落库（`result_id` 前缀 `cmp_`、`result_json.kind="compare"` 含 members 明细），可用 vision_query / vision_export 复查。
+- **组指纹缓存**：对比结果的缓存键为成员 sha256 排序后联合哈希（`grp_` 前缀），与 paths 顺序、文件名无关；同组 + 同模型 + 同问题 + 同 detail 才命中，换问题重新对比。相同内容的成员自动去重。phash 近似兑底不参与图组（组记录落库 `phash=""`，被双侧纯色守卫天然排除）。追问（`previous_result_id`）仅当指向同一组（组指纹相同）时注入上文，防跨组污染。
+- **多图护栏**：单次 2-16 张（`MAX_COMPARE_IMAGES`，16 张 ≈ 16K token 与请求体的平衡点）；内联 base64 总量 40 MiB 预算（`MAX_INLINE_IMAGES_B64`，DeepSeek 请求体上限 48 MiB 留余量），超预算抛 `ImageTooLargeError`（不重试不降级，与单图超限同一语义）；空内容 JSON 不落库（与 vision_read 同一防护）。
+- **`_vl_client` 发送路径收敛**：抽出 `_post_chat`（user 消息 content 块数组 → OpenAI 兼容端点，`response_format`/reasoning_content 回退逻辑单点化），单图 `read_image` 与新增多图 `read_images` 共用；`read_image` 签名与行为不变。
+
 ## 1.0.6
 
 ### 新增

@@ -14,6 +14,28 @@ def _make_db():
     return create_store(db_path), db_path
 
 
+def test_get_by_result_id_does_not_count_hit():
+    """get_by_result_id 只读不计数：hit_count 专属于缓存命中，
+    「查看」不刷高命中统计（search 按 hit_count DESC 排序的可信度）。"""
+    db, db_path = _make_db()
+    try:
+        db.insert(
+            sha256="sha1", filename="a.png", phash="", model_id="m", question="",
+            result_id="res_x", source_value="/tmp/a.png", peek="p", text="t",
+            tags=[], result_json={},
+        )
+        db.get_by_result_id("res_x")
+        db.get_by_result_id("res_x")
+        row = db.get_by_result_id("res_x")
+        assert row["hit_count"] == 0  # 查看不计数
+        # 真缓存命中才计数
+        db.find_cached("sha1", "m", "")
+        assert db.get_by_result_id("res_x")["hit_count"] == 1
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
 def test_find_cached_and_insert():
     db, db_path = _make_db()
     try:

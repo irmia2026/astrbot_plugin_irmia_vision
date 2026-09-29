@@ -7,6 +7,72 @@ import tempfile
 from tools import config as tool_config
 
 
+def test_provider_chain_inherits_reasoning_effort():
+    """provider 链转换继承全局 vl_model 的 reasoning_effort（与 detail 同一模式）。"""
+    providers = [
+        {"id": "p1", "key": ["k"], "api_base": "http://x", "model": "deepseek-flash"},
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config(
+            {"vl_provider_ids": "p1", "vl_model": {"reasoning_effort": "high", "detail": "low"}},
+            tmpdir,
+        )
+        tool_config.set_providers(providers)
+        chain = tool_config.resolve_provider_chain()
+        assert chain[0]["reasoning_effort"] == "high"
+        # 缺省继承默认 low
+        tool_config.set_config({"vl_provider_ids": "p1", "vl_model": {}}, tmpdir)
+        chain = tool_config.resolve_provider_chain()
+        assert chain[0]["reasoning_effort"] == "low"
+
+
+def test_safe_int_normalization_in_chain():
+    """max_retries/concurrency 非法值经 resolve_provider_chain 归一（与 timeout 同一模式），
+    手编 config.json 写 \"abc\"/None 不再让下游 int() 穿透成不透明错误。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config(
+            {"vl_provider_ids": "", "vl_model": {
+                "api_key": "sk-x", "model": "m",
+                "max_retries": "abc", "concurrency": None, "timeout": "60",
+            }},
+            tmpdir,
+        )
+        tool_config.set_providers([])
+        chain = tool_config.resolve_provider_chain()
+        assert chain[0]["max_retries"] == 2  # 非法回退默认
+        assert chain[0]["concurrency"] == 50  # None 回退默认
+        assert chain[0]["timeout"] == 60.0  # 字符串数字归一为 float
+
+    # provider 链转换同样归一（从全局 vl_model 继承）
+    providers = [{"id": "p1", "key": ["k"], "api_base": "http://x", "model": "m1"}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config(
+            {"vl_provider_ids": "p1", "vl_model": {"max_retries": "5", "concurrency": "bad"}},
+            tmpdir,
+        )
+        tool_config.set_providers(providers)
+        chain = tool_config.resolve_provider_chain()
+        assert chain[0]["max_retries"] == 5  # 字符串数字兼容
+        assert chain[0]["concurrency"] == 50  # 非法回退
+
+
+def test_get_max_batch():
+    """max_batch 保险丝解析：缺省/字符串数字/非法/0/负数的行为。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tool_config.set_config({}, tmpdir)
+        assert tool_config.get_max_batch() == 2000  # 缺省默认
+        tool_config.set_config({"max_batch": 500}, tmpdir)
+        assert tool_config.get_max_batch() == 500
+        tool_config.set_config({"max_batch": "300"}, tmpdir)
+        assert tool_config.get_max_batch() == 300  # 字符串数字兼容
+        tool_config.set_config({"max_batch": "abc"}, tmpdir)
+        assert tool_config.get_max_batch() == 2000  # 非法回退
+        tool_config.set_config({"max_batch": 0}, tmpdir)
+        assert tool_config.get_max_batch() == 2000  # 0 回退
+        tool_config.set_config({"max_batch": -5}, tmpdir)
+        assert tool_config.get_max_batch() == 2000  # 负数回退
+
+
 def test_config_set_and_get():
     cfg = {
         "vl_model": {

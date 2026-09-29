@@ -9,6 +9,7 @@
 - `vision_read`：读取图片或文件夹中的所有图片，调用用户配置的 VL 模型理解内容，结果存入本地数据库。
 - `vision_query`：查询已读图的结果，支持关键词、文件名、路径、最近结果、分页。
 - `vision_export`：将大量结果导出为 JSON/CSV，方便交给 Python 脚本批量处理。
+- `vision_compare`：多图对比询问。多张图片在同一次 VL 请求中发送（模型同时看到全部图），找不同、横向对比、前后变化分析，结论直接返回并落库。
 - `see_window`：截取整个屏幕或指定窗口画面并用 VL 模型分析，快速了解用户在干什么（仅 Windows）。
 - 结构化读图结果：要求模型返回 JSON（`peek` 一句话预览 + `text` 完整内容 + `tags` 内容标签），插件容错解析，模型不遵守格式时自动回退。
 - 异步并发 VL 调用，自适应并发数。
@@ -27,8 +28,6 @@ pip install -r requirements.txt
 3. 在 AstrBot WebUI 的插件配置中填写 VL 模型信息。
 
 ## 配置示例
-
-### 推荐方式：复用 AstrBot 已保存的模型
 
 ### 推荐方式：WebUI 下拉框选择模型
 
@@ -79,6 +78,7 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 | `vl_provider_2` | 次选 VL 模型（首选不可用时降级）。 |
 | `vl_provider_3` | 再次选 VL 模型（次选也不可用时降级）。 |
 | `vl_provider_ids` | 高级：手动填写模型 ID（逗号分隔），覆盖下拉框。 |
+| `max_batch` | 单次批量读图数量上限，默认 2000（账单保险丝）。 |
 | `provider` | 提供商标识，目前仅用于日志展示。 |
 | `base_url` | OpenAI 兼容 API 的 base URL。 |
 | `api_key` | API 密钥。 |
@@ -86,7 +86,8 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 | `timeout` | 单次 VL 请求超时时间（秒），默认 120。 |
 | `concurrency` | 并发请求数。留空时根据 `timeout` 自适应，最高 200。 |
 | `max_retries` | 单张图失败重试次数，默认 2。 |
-| `detail` | 图片细节级别（支持 detail 的模型，如 DeepSeek v4fve）：`low` 更快更省、`auto` 自动（默认）、`original` 保留原图。 |
+| `detail` | 图片细节级别：`low` 更快更省（客户端对齐服务端压到 512×512）、`auto` 自动（默认）、`original` 保留原图（DeepSeek 的 `high` 等价 `original`）。 |
+| `reasoning_effort` | DeepSeek 思考强度（仅 deepseek-flash / v4fve 生效）：`low` 更快更省、截断风险最低（默认，读图任务足够）、`high`/`max` 更深思虑、`none` 关闭思考模式。 |
 
 ## 使用示例
 
@@ -113,6 +114,12 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 2. `vision_export({"path": "/source/folder", "fmt": "json", "limit": 10000})` 导出 JSON。
 3. 导出文件路径会返回给 LLM，可交给 Python 脚本进行批量分类、移动、统计等处理。
 
+**多图对比场景**：
+
+1. LLM 调用 `vision_compare({"paths": ["/shots/v1.png", "/shots/v2.png"], "question": "两版 UI 有什么差异？"})`。
+2. 结论直接返回（peek + text + tags），同时落库，可用 `vision_query` 复查。
+3. 追问同组图片：`vision_compare({"paths": [同一组路径], "question": "哪个改动最影响可用性？", "previous_result_id": "cmp_xxx"})`。
+
 ## 工具参数
 
 ### vision_read
@@ -136,6 +143,15 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 | `limit` | `integer` | 否 | 最多返回条数，默认 20，最大 100。 |
 | `offset` | `integer` | 否 | 分页偏移，默认 0。 |
 
+### vision_compare
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `paths` | `list[string]` | 是 | 2-16 张图片或文件夹路径。相同内容的图片自动去重。 |
+| `question` | `string` | 否 | 对比问题。留空使用默认对比分析 prompt（逐图要点→相同点→不同点→结论）。 |
+| `force_reread` | `boolean` | 否 | 忽略组缓存强制重新对比。 |
+| `previous_result_id` | `string` | 否 | 追问模式。仅对同一组图片（组指纹相同的 `cmp_` 记录）生效。 |
+
 ### vision_export
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -151,14 +167,16 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 
 ## 注意事项
 
-- 只处理 `png/jpg/jpeg/webp/gif/bmp` 图片。
+- 只处理 `png/jpg/jpeg/webp/gif/bmp` 图片；GIF 动图只读取第一帧（动画内容不会被完整理解）。
+- 单次批量读图默认上限 2000 张（配置项 `max_batch`）：误传大目录会报错并提示分批，避免失控的 VL 调用费用。确需更大批量时调大该配置。
 - 大图片会自动压缩到长边 2048 后上传；仅当压缩后仍超过 20MB 才报错（不限制原始文件大小）。
 - 同一张图（按内容 hash + 模型 + 问题 + detail 档位，与文件名无关）读过会命中缓存，不再重复调用 VL 模型；缩尺/重压缩过的同图会经 phash 感知哈希近似命中（纯色图除外；see_window 为保证屏幕内容新鲜禁用近似命中）。近似命中会在响应中明确标注 `cached_via_phash`。
+- `vision_compare` 的缓存键是**组指纹**（成员图片内容 hash 排序后联合哈希）：同一组图片任意顺序传入都命中，换问题/换模型/换 detail 重新对比；phash 近似命中不适用于图组。对比结论直接返回（上限 4000 字），同时落库供复查。单次上限 16 张、内联总量 40MB（DeepSeek 请求体上限 48MiB 留余量）。
 - `vision_read` 只返回读取计数与下一步建议（不返回每张图内容）：单图建议直接 full 查，批量建议先 list 浏览。详细内容请用 `vision_query` 查询。
 - 路径支持绝对路径、相对路径和 `~` 用户主目录。
 - 并发数默认根据 `timeout` 自适应，避免把慢 API 打挂。如需固定，可配置 `concurrency`。
 - 支持多模型降级：三个下拉框按优先级排列，靠前的模型失败时自动切换到下一个。全部留空则自动使用所有已保存模型。
-- DeepSeek v4fve（`deepseek-v4-flash-vision-exp`）适配：检测到该模型时压缩长边自动从 2048 降为 1024（其服务端会将图片缩放到总像素约 800×800、每张 token 上限 384，更大输入无收益只费带宽），并自动处理其推理模式的 `reasoning_content` 回退。
+- DeepSeek v4fve（`deepseek-v4-flash-vision-exp`）与现行 `deepseek-flash` 适配：检测到思考型模型时压缩长边自动从 2048 降为 1024（其服务端会将图片缩放到总像素约 1300×1300、每张 token 上限 1024，更大输入无收益只费带宽）；默认以 `reasoning_effort=low` 调用（读图是感知任务，低强度思考足够，显著降低截断风险与费用）；`max_tokens` 基线抬到 8192（思维链与答案共享额度，过小会被思考吃光导致截断）；输出被截断（`finish_reason=length`）时自动放大额度重试一次，仍截断则计为失败并降级，不会把截断内容（含思维链）落库。
 
 ## 开发
 

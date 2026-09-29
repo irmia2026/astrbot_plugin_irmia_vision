@@ -6,11 +6,12 @@
 
 ## 工具
 
-四个工具，差分明显：
+五个工具，差分明显：
 
 - `vision_read`：读图并落库，只返回摘要，不返回每张图的详细内容。
 - `vision_query`：查询已落库的结果。列表查询返回轻量列表（list 模式，每行含 `peek` 一句话预览），`result_id` 精确查询返回完整信息（full 模式）。
 - `vision_export`：把符合条件的结果导出为 JSON/CSV 文件，方便外部脚本批量处理。
+- `vision_compare`：多图对比询问。整组图在同一次 VL 请求中发送（模型同时看到全部图才能做跨图判断），结论直接返回并落库；缓存按「组指纹」寻址。
 - `see_window`：截取整个屏幕或指定窗口画面，用 VL 模型分析（默认提示词偏向判断用户在干什么），仅支持 Windows。
 
 ## 数据流
@@ -42,6 +43,9 @@ LLM 调用 vision_query(query/result_id/filename/path/recent/limit/offset)
 如需批量处理大量结果，调用 vision_export 导出 JSON/CSV 文件
 ```
 
+多图对比走独立路径：`vision_compare(paths=[...])` → 整组图单次 VL 请求（组指纹缓存）→ 结论直接返回并落库；
+`see_window` 截图后复用 vision_read 读图管线（禁用 phash 近似命中）。
+
 ## 缓存设计
 
 表 `image_cache` 以 `(sha256, model_id, question, detail)` 为逻辑缓存键（内容寻址，不含文件名）：
@@ -64,6 +68,18 @@ sha256 精确未命中后，还有 phash 感知哈希近似兜底（`find_cached
 
 追问模式通过 `previous_result_id` 携带上文，但只作用于与之前同一张图片（sha256 相同），避免污染多张图片。
 
+### vision_compare 的组缓存
+
+对比结果取决于「这一组图片」而非单张，缓存键为**组指纹**：成员 sha256 排序后联合哈希（`grp_` 前缀，与单图裸 sha256 在库中可区分）：
+
+- 与 paths 顺序、文件名无关——同一组图片任意顺序传入都命中同一缓存键。
+- 同组 + 同 model + 同 question + 同 detail 才命中；换问题重新对比（同组多问题并存为多条记录）。
+- 相同内容的成员自动去重（重复传入同一张图对对比无意义）；去重后不足 2 张直接报错。
+- phash 近似兑底不参与：组指纹不是图片，无 phash 对应物；组记录落库 `phash=""`，被近似匹配的双侧纯色守卫天然排除。
+- 请求形态遵循 DeepSeek 多图契约：多个 image_url 块放同一条 user 消息，图片间插入「图1/图2（文件名）」文本标记接地；单次上限 16 张（MAX_COMPARE_IMAGES）、内联 base64 总量 40 MiB 预算（请求体上限 48 MiB 留余量）。
+- 结论直接返回（peek + text≤4000 字 + tags）——对比的答案就是交付物，强制二次查询是纯摩擦；同时落库（`result_id` 前缀 `cmp_`，`result_json.kind="compare"` 含 members 明细）供 vision_query / vision_export 复查。
+- 追问仅当 `previous_result_id` 指向同一组（组指纹相同）时注入上文，防跨组污染。
+
 ## 结构化输出
 
 读图 prompt 要求模型返回 JSON：`{"peek": "一句话预览：这是什么图+最值得注意的信息", "text": "详细描述/完整回答", "tags": [...]}`。
@@ -80,13 +96,14 @@ sha256 精确未命中后，还有 phash 感知哈希近似兜底（`find_cached
 | 文件 | 职责 |
 |---|---|
 | `main.py` | 插件入口：加载配置、从 AstrBot context 读取已保存模型列表、初始化数据库、注册工具 |
-| `tools/_registry.py` | 工厂函数 `make_tool`，注册四个工具实例 |
+| `tools/_registry.py` | 工厂函数 `make_tool`，注册五个工具实例 |
 | `tools/vision_read.py` | 扫描路径、缓存判断、调用 VL、落库、返回摘要 |
 | `tools/vision_query.py` | 按多种条件查询缓存结果，支持 list/full 模式 |
 | `tools/vision_export.py` | 批量导出已读图结果为 JSON/CSV，方便外部脚本处理 |
+| `tools/vision_compare.py` | 多图对比：组指纹缓存、内容去重、单次多图 VL 请求、结论直接返回并落库 |
 | `tools/see_window.py` | Windows 屏幕/窗口截图分析（win32gui 枚举窗口 + PIL 截图），复用 vision_read 读图管线 |
 | `tools/_store.py` | 存储抽象层：定义 `VisionStore` 基类，默认 `SQLiteVisionStore` |
-| `tools/_vl_client.py` | OpenAI 兼容 VL 客户端 |
+| `tools/_vl_client.py` | OpenAI 兼容 VL 客户端（单图 `read_image` / 多图 `read_images`，发送路径收敛于 `_post_chat`） |
 | `tools/_helpers.py` | `unwrap`、`proposal_reply`、`run_sync` |
 | `tools/config.py` | 插件配置内存管理、provider 降级链解析 |
 | `tools/tool_stats.py` | 工具调用统计 |

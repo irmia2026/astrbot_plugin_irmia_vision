@@ -134,6 +134,27 @@ def _grab_to_file(bbox: tuple[int, int, int, int] | None, save_dir: str) -> str:
     return path
 
 
+# 截图临时目录的磁盘泄漏防护：只保留最近 N 张
+_MAX_KEPT_SCREENSHOTS = 50
+
+
+def _cleanup_old_screenshots(save_dir: str, keep: int = _MAX_KEPT_SCREENSHOTS) -> None:
+    """滚动清理截图目录。文件名带时间戳（see_window_YYYYMMDD_HHMMSS_ffffff.png），
+    按名称排序即时间序；失败静默——清理是尽力而为，不应影响截图主流程。"""
+    try:
+        files = sorted(
+            f for f in os.listdir(save_dir)
+            if f.startswith("see_window_") and f.endswith(".png")
+        )
+        for f in files[: max(0, len(files) - keep)]:
+            try:
+                os.remove(os.path.join(save_dir, f))
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 async def see_window(
     db,
     window: str = "",
@@ -189,6 +210,7 @@ async def see_window(
             f"截图失败: {e}",
             options=["检查是否有桌面会话权限", "使用 vision_read 读取已有图片"],
         )
+    _cleanup_old_screenshots(save_dir)
 
     prompt = question if str(question).strip() else DEFAULT_SCREEN_PROMPT
     result = await vision_read.read(

@@ -2,6 +2,8 @@ import os
 import sys
 import types
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Mock astrbot 依赖，使独立测试可以导入 tools 模块
@@ -59,3 +61,14 @@ if "astrbot.api" not in sys.modules:
             pass
 
         api_pkg.FunctionTool = _FunctionTool
+
+
+@pytest.fixture(autouse=True)
+def _reset_tool_config_globals():
+    """每个测试后重置插件全局配置，防止 set_config/set_providers 跨测试泄漏
+    （如 test_max_batch_guard 把 max_batch=3 写全局）。机制保障，不靠纪律维持。"""
+    yield
+    from tools import config as tool_config
+
+    tool_config.set_config({}, "")
+    tool_config.set_providers([])

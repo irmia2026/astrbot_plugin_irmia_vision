@@ -16,8 +16,15 @@ from PIL import Image
 
 from ._helpers import proposal_reply, run_sync
 from ._store import VisionStore
-from ._vl_client import ImageTooLargeError, normalize_detail, read_image as vl_read_image
-from .config import resolve_provider_chain
+from ._vl_client import (
+    ImageTooLargeError,
+    OutputTruncatedError,
+    effective_target_edge,
+    encode_image,
+    normalize_detail,
+    read_image as vl_read_image,
+)
+from .config import get_max_batch, resolve_provider_chain
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 # v3 提示词：刻意精简。只保留解析契约（JSON schema）与三条质量护栏
@@ -169,6 +176,15 @@ async def read(
             "未找到任何支持的图片文件。请确认路径存在，并且包含 png/jpg/jpeg/webp/gif/bmp 格式的图片。",
             options=["检查路径是否正确", "使用 vision_query 查看已有结果"],
         )
+    # 账单保险丝：批量读图按张调用 VL 模型计费，误传大目录会产生失控费用
+    max_batch = get_max_batch()
+    if len(image_paths) > max_batch:
+        return proposal_reply(
+            False,
+            f"找到 {len(image_paths)} 张图片，超过单次批量上限 {max_batch} 张（可在插件配置 max_batch 调整）。"
+            "请分批传入子目录，避免失控的 VL 调用费用。",
+            options=["分批传入子目录", "调大 max_batch 配置后重试", "使用 vision_query 查看已有结果"],
+        )
     # 默认/追问模式都有 JSON 契约后缀：追问上下文注入在 base 与 suffix 之间，
     # 保证任何路径下模型最后看到的都是格式要求
     base_prompt = question if question else DEFAULT_PROMPT
@@ -256,19 +272,37 @@ async def read(
             used_model = ""
             used_detail = cache_detail
             last_err: Exception | None = None
+            # 重试/降级间按压缩档位复用编码结果：同一张图的压缩+base64 只做一次，
+            # 避免 (retries+1)×链长 次重复编码（降级链上 detail 一致，档位只随模型类型变）
+            encoded_urls: dict = {}
             for vl_cfg in chain:
                 if not vl_cfg.get("api_key"):
                     continue
                 for attempt in range(max_retries + 1):
                     async with semaphore:
                         try:
-                            raw = await vl_read_image(path, final_prompt, client=_httpx_client, vl_config=vl_cfg, json_mode=True)
+                            edge = effective_target_edge(vl_cfg.get("model", ""), vl_cfg.get("detail", "auto"))
+                            if edge not in encoded_urls:
+                                encoded_urls[edge] = await run_sync(encode_image, path, edge)
+                            raw = await vl_read_image(
+                                path, final_prompt, client=_httpx_client, vl_config=vl_cfg,
+                                json_mode=True, image_url=encoded_urls[edge],
+                            )
                             last_err = None
                             used_model = vl_cfg.get("model", "unknown")
                             used_detail = normalize_detail(vl_cfg.get("detail", "auto"))
                             break
-                        except ImageTooLargeError:
-                            raise  # 压缩后仍超限：重试/降级结果都一样，直接失败不放大
+                        except ImageTooLargeError as e:
+                            # 同一 provider 重试无意义（同压缩档位重编码结果相同）；
+                            # 但压缩档位按模型类型分档（非DS 2048 / DS 1024），
+                            # 降级到更小档位的模型可能通过 → break 进降级链
+                            last_err = e
+                            break
+                        except OutputTruncatedError as e:
+                            # 额度已在客户端内部放大重试过，同一模型重试无意义；
+                            # 但截断是模型相关的（思考型模型易触发），降级换模型可能成功
+                            last_err = e
+                            break
                         except Exception as e:
                             last_err = e
                     if last_err is None:

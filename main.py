@@ -17,6 +17,7 @@ _DEFAULT_CONFIG = {
     "vl_provider_2": "",
     "vl_provider_3": "",
     "vl_provider_ids": "",
+    "max_batch": 2000,
     "vl_model": {
         "provider": "openai",
         "base_url": "https://api.openai.com/v1",
@@ -26,6 +27,7 @@ _DEFAULT_CONFIG = {
         "concurrency": 50,
         "max_retries": 2,
         "detail": "auto",
+        "reasoning_effort": "low",
     },
 }
 
@@ -98,6 +100,10 @@ class Main(star.Star):
                 vl_provider_ids = web_config.get("vl_provider_ids", "")
                 if vl_provider_ids:
                     _config["vl_provider_ids"] = vl_provider_ids
+            # 批量读图保险丝（0/空 保持默认）
+            max_batch = web_config.get("max_batch")
+            if max_batch:
+                _config["max_batch"] = max_batch
 
         # 从 AstrBot context 读取已保存的模型提供商列表
         providers = []
@@ -175,12 +181,16 @@ class Main(star.Star):
             changed = False
             for field_name in ("vl_provider_1", "vl_provider_2", "vl_provider_3"):
                 field = items.get(field_name)
-                if field is not None:
+                # 幂等：options/labels 与已有值相同则不动文件，避免每次启动都污染 git 工作区
+                if field is not None and (field.get("options") != ids or field.get("labels") != labels):
                     field["options"] = ids
                     field["labels"] = labels
                     changed = True
             if changed:
-                with open(schema_path, "w", encoding="utf-8") as f:
+                # 原子写：临时文件 + replace，避免崩溃把 schema 截断成半个 JSON
+                tmp_path = schema_path + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(schema, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, schema_path)
         except Exception:
             pass  # 写入失败不影响功能

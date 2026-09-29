@@ -27,6 +27,12 @@
         "type": "string",
         "default": ""
       },
+      "max_batch": {
+        "description": "单次批量读图数量上限（账单保险丝）。误传大目录时超过此数量会报错并提示分批，避免失控的 VL 调用费用。",
+        "hint": "默认 2000。调大需谨慎——批量读图按张调用 VL 模型计费。",
+        "type": "int",
+        "default": 2000
+      },
       "vl_model": {
         "description": "手动 VL 模型连接参数（当以上所有配置均为空时生效）",
         "type": "object",
@@ -68,9 +74,14 @@
             "default": 2
           },
           "detail": {
-            "description": "图片细节级别（支持 detail 的模型，如 DeepSeek v4fve）：low=更快更省，auto=自动，original=保留原图",
+            "description": "图片细节级别：low=更快更省（服务端缩到 512×512），auto=自动，original=保留原图（DeepSeek 的 high 等价 original）",
             "type": "string",
             "default": "auto"
+          },
+          "reasoning_effort": {
+            "description": "DeepSeek 思考强度（仅 deepseek-flash / v4fve 生效）：low=更快更省、截断风险最低（默认，读图任务足够），high/max=更深思虑，none=关闭思考模式",
+            "type": "string",
+            "default": "low"
           }
         }
       }

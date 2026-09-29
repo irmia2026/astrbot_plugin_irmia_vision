@@ -220,7 +220,7 @@ def test_structured_read_populates_tags(tmp_path):
 
     original_vl = vision_read.vl_read_image
 
-    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
         assert "json" in prompt.lower()  # 结构化 prompt 必须含 json 字样
         return '{"peek": "这是一张测试图片，可以看到红蓝图形", "text": "完整描述", "tags": ["测试", "图形"]}'
 
@@ -254,7 +254,7 @@ def test_allow_phash_false_disables_fallback(tmp_path):
     calls = []
     original_vl = vision_read.vl_read_image
 
-    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
         calls.append(path)
         return '{"peek": "描述", "text": "细节", "tags": []}'
 
@@ -316,7 +316,7 @@ def test_follow_up_context_before_json_instruction(tmp_path):
     captured = {}
     original_vl = vision_read.vl_read_image
 
-    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
         captured["prompt"] = prompt
         return '{"peek": "回答", "text": "细节", "tags": []}'
 
@@ -356,7 +356,7 @@ def test_batch_read_next_call_is_list_mode(tmp_path):
 
     original_vl = vision_read.vl_read_image
 
-    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
         return '{"peek": "预览", "text": "正文", "tags": []}'
 
     async def _run():
@@ -415,7 +415,7 @@ def test_follow_up_without_question_keeps_json_instruction_last(tmp_path):
     captured = {}
     original_vl = vision_read.vl_read_image
 
-    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
         captured["prompt"] = prompt
         return '{"peek": "预览", "text": "正文", "tags": []}'
 
@@ -445,7 +445,7 @@ def test_empty_structured_content_not_stored(tmp_path):
 
     original_vl = vision_read.vl_read_image
 
-    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False):
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
         return '{"tags": ["抽风"]}'
 
     async def _run():
@@ -457,6 +457,282 @@ def test_empty_structured_content_not_stored(tmp_path):
             assert "结构化解析后为空" in result["proposal"]
             # 不落库：DB 应为空
             assert db.get_recent(limit=10) == []
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_image_too_large_falls_back_to_smaller_edge_provider(tmp_path):
+    """混合链 [非DS主, DS备]：主档位（2048）超限不掐死 fallback——
+    DS 备用的 1024 档可能通过（独立审查发现：原「重试/降级都一样」注释不成立）。"""
+    from tools import vision_read
+    from tools._vl_client import ImageTooLargeError
+
+    fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
+    os.close(fd)
+    db = create_store(db_path)
+    tool_config.set_config({"vl_provider_ids": "p-big, p-ds", "vl_model": {}}, str(tmp_path))
+    tool_config.set_providers([
+        {"id": "p-big", "key": ["k1"], "api_base": "http://x", "model": "gpt-4o"},
+        {"id": "p-ds", "key": ["k2"], "api_base": "http://x", "model": "deepseek-flash"},
+    ])
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    seen = []
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        model = (vl_config or {}).get("model", "")
+        seen.append(model)
+        if model == "gpt-4o":
+            raise ImageTooLargeError("2048 档超限")
+        return '{"peek": "DS 1024 档通过", "text": "正文", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[img_path])
+            assert result["ok"] is True
+            assert result["read"] == 1
+            # gpt-4o 只调一次（同档位重试无意义），降级 deepseek-flash 成功
+            assert seen == ["gpt-4o", "deepseek-flash"]
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_max_batch_boundary_allows_exact_limit(tmp_path):
+    """len == max_batch 恰好放行（边界：超限才拦截）。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    tool_config.set_config({**tool_config.get_config(), "max_batch": 2}, str(tmp_path))
+    _make_test_image(str(tmp_path / "x1.png"), size=(210, 210))
+    _make_test_image(str(tmp_path / "x2.png"), size=(220, 220))
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        return '{"peek": "p", "text": "t", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[str(tmp_path / "x1.png"), str(tmp_path / "x2.png")])
+            assert result["ok"] is True
+            assert result["read"] == 2
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_partial_status_when_some_images_fail(tmp_path):
+    """部分成功部分失败 → status=partial，read/failed 计数与 failed_paths 正确。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    ok_img = str(tmp_path / "ok.png")
+    bad_img = str(tmp_path / "bad.png")
+    _make_test_image(ok_img)
+    _make_test_image(bad_img, size=(820, 610))
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        if path == bad_img:
+            raise ConnectionError("模拟失败")
+        return '{"peek": "预览", "text": "正文", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[ok_img, bad_img])
+            assert result["ok"] is True
+            assert result["status"] == "partial"
+            assert result["read"] == 1
+            assert result["failed"] == 1
+            assert len(result["failed_paths"]) == 1
+            assert bad_img in result["failed_paths"][0]
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_image_too_large_not_retried(tmp_path):
+    """ImageTooLargeError：不重试不降级，直接计为失败（压缩后仍超限，重试结果不变）。"""
+    from tools import vision_read
+    from tools._vl_client import ImageTooLargeError
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    calls = []
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        calls.append(path)
+        raise ImageTooLargeError("压缩后仍超过 20MB")
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[img_path])
+            assert result["ok"] is False
+            assert len(calls) == 1  # 不重试
+            assert db.get_recent(limit=10) == []
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_max_batch_guard(tmp_path):
+    """超过 max_batch 上限：直接报错不调 VL（账单保险丝，防误传大目录失控计费）。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    tool_config.set_config({**tool_config.get_config(), "max_batch": 3}, str(tmp_path))
+    for i in range(4):
+        _make_test_image(str(tmp_path / f"batch{i}.png"), size=(210 + i, 210))
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        raise AssertionError("超限时不应调用 VL")
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[str(tmp_path)])
+            assert result["ok"] is False
+            assert "max_batch" in result["proposal"]
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_retry_reuses_encoded_image(tmp_path):
+    """重试/降级链上同一压缩档位的编码结果复用：两次调用收到同一个 image_url，
+    同一张图的压缩+base64 只做一次。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)  # max_retries 默认 2
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    received_urls = []
+    attempts = {"n": 0}
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        received_urls.append(image_url)
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise ConnectionError("第一次失败")
+        return '{"peek": "预览", "text": "正文", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[img_path])
+            assert result["read"] == 1
+            assert len(received_urls) == 2
+            assert received_urls[0] is not None
+            assert received_urls[0].startswith("data:image/")
+            assert received_urls[0] == received_urls[1]  # 编码复用，不重复压缩
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_truncated_output_no_same_model_retry(tmp_path):
+    """OutputTruncatedError（放大重试后仍截断）：同一 provider 不再重复重试
+    （额度已在客户端内部放大过），链尽后计入 failed。"""
+    from tools import vision_read
+    from tools._vl_client import OutputTruncatedError
+
+    db, db_path = _setup_fake_vl(tmp_path)  # max_retries 默认 2
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    calls = []
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        calls.append(path)
+        raise OutputTruncatedError("模型 x 输出在 max_tokens=16384 下仍被截断")
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[img_path])
+            assert result["ok"] is False
+            assert len(calls) == 1  # 不重试同一模型
+            assert db.get_recent(limit=10) == []  # 截断内容不落库
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    asyncio.run(_run())
+
+
+def test_truncated_first_provider_falls_back_to_second(tmp_path):
+    """首选思考型模型截断 → 降级到次选成功（截断是模型相关的，降级有意义）。"""
+    from tools import vision_read
+    from tools._vl_client import OutputTruncatedError
+
+    fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
+    os.close(fd)
+    db = create_store(db_path)
+    tool_config.set_config(
+        {
+            "vl_provider_ids": "p-thinker, p-plain",
+            "vl_model": {},
+        },
+        str(tmp_path),
+    )
+    tool_config.set_providers([
+        {"id": "p-thinker", "key": ["k1"], "api_base": "http://x", "model": "deepseek-flash"},
+        {"id": "p-plain", "key": ["k2"], "api_base": "http://x", "model": "gpt-4o"},
+    ])
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    seen_models = []
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        model = (vl_config or {}).get("model", "")
+        seen_models.append(model)
+        if model == "deepseek-flash":
+            raise OutputTruncatedError("仍被截断")
+        return '{"peek": "次选模型的答案", "text": "完整", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            result = await vision_read.read(db, paths=[img_path])
+            assert result["ok"] is True
+            assert result["read"] == 1
+            # deepseek-flash 只调一次（不重试），随后降级 gpt-4o 成功
+            assert seen_models == ["deepseek-flash", "gpt-4o"]
+            rid = result["next_call"]["arguments"]["result_id"]
+            assert db.get_by_result_id(rid)["peek"] == "次选模型的答案"
         finally:
             vision_read.vl_read_image = original_vl
             db.close()

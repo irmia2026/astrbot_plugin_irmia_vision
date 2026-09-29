@@ -63,7 +63,8 @@ async def query(
             text = r.get("text", "")
             item.update({
                 "path": r.get("source_value", ""),
-                "text": (text[:2000] + "..." if len(text) > 2000 else text),
+                # 与 vision_compare 直返上限对齐：同一记录在两个入口完整度一致
+                "text": (text[:4000] + "..." if len(text) > 4000 else text),
                 "tags": tags,
                 "read_at": r.get("read_at", ""),
                 "hit_count": r.get("hit_count", 0),

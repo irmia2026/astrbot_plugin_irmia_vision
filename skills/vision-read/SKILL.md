@@ -3,7 +3,7 @@ name: vision-read
 description: >
   主动读图工作流。触发：当你在任何场景下需要获取图片中的视觉信息——包括用户明确要求看图片、以及你在文件操作（dir_list、es_search、目录遍历等）中自行发现了 .jpg/.png/.webp/.bmp 等图片文件并认为其内容可能与当前任务相关。
   核心原则：先批量读图落库，再按需查询结果，避免把大量图片描述塞进上下文。
-  可用工具：vision_read、vision_query、vision_export、see_window。
+  可用工具：vision_read、vision_query、vision_export、vision_compare、see_window。
 ---
 
 # 视觉读图工作流
@@ -75,6 +75,7 @@ vision_read 只负责把图读完存进数据库。
 要点：
 
 - `paths` 可以是文件路径或文件夹路径，支持多个。
+- 单次批量上限 2000 张（`max_batch` 配置）：超限会被拦截报错，分批传入子目录。
 - **默认不要传 `question`**，工具会用专业图片描述 prompt 自动读取。
 - 只有需要追问特定问题时，才传 `question`。
 - 同一个 `question` 会命中缓存；换问题会重新读图。
@@ -97,7 +98,7 @@ vision_read 只负责把图读完存进数据库。
   "proposal": "读图完成。请用 vision_query 查看具体结果。",
   "next_call": {
     "tool": "vision_query",
-    "arguments": {"result_id": "res_abc123", "recent": 10}
+    "arguments": {"recent": 10}
   }
 }
 ```
@@ -197,6 +198,28 @@ vision_read 只负责把图读完存进数据库。
 3. 如果数量少，用 `vision_query(result_id="res_xxx")` 逐个确认 full 信息；如果数量多，用 `vision_export(query="invoice")` 导出完整信息（含 path）。
 4. 输出分类 → 文件路径的映射，由外部系统或用户执行移动。
 
+## 多图对比（vision_compare）
+
+当任务需要**跨图结论**时使用——找不同、横向对比、前后变化、多张截图联合分析：
+
+- 用户给了一组图问「哪张更…」「有什么区别」「哪版更好」
+- 你在文件操作中发现同一主题的多个变体（多版设计稿、连拍照片、前后截图）
+
+```json
+{
+  "paths": ["/shots/v1.png", "/shots/v2.png"],
+  "question": "两版 UI 有什么差异？"
+}
+```
+
+要点：
+
+- 多张图在**同一次请求**中发给模型（模型同时看到全部图），比逐张 vision_read 再自己拼结论可靠得多。
+- 结论**直接返回**（peek + text + tags），同时落库（result_id 前缀 `cmp_`），可用 vision_query 复查。
+- 2-16 张；同内容图片自动去重；同组图片（与顺序无关）+ 同一 question 命中组缓存。
+- 追问同组图片：传 `previous_result_id`（须为同组的 cmp_ 记录）。
+- 超过 16 张：分批对比，或先用 vision_read 逐张读取再汇总。
+
 ## 注意事项
 
 - 不要等 `vision_read` 返回每张图的详细内容，它只返回摘要。
@@ -209,6 +232,7 @@ vision_read 只负责把图读完存进数据库。
 ## 反模式
 
 - ❌ 调用 `vision_read` 后期待返回所有图片的详细描述。
+- ❌ 需要跨图结论时对每张图单独 `vision_read` 再自己拼——模型没有同时看到所有图，对比质量差；应使用 `vision_compare`。
 - ❌ 不查缓存直接让 VL 模型重复读同一张图。
 - ❌ 把大量图片结果塞进上下文，而不是用 `vision_query` 分批查询或 `vision_export` 导出。
 - ❌ 用 `vision_query` 的 `sha256` 字段搜索（已移除）。

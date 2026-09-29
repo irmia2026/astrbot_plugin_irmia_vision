@@ -15,6 +15,7 @@ from ._store import create_store, VisionStore
 from . import vision_read as _vision_read
 from . import vision_query as _vision_query
 from . import vision_export as _vision_export
+from . import vision_compare as _vision_compare
 from . import see_window as _see_window
 
 
@@ -163,7 +164,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "导出文件路径。默认保存到插件目录下的 exports/vision_export_时间戳.json。",
+                        "description": "导出文件路径。默认保存到当前工作目录下 vision_export_时间戳.json。",
                     },
                     "fmt": {
                         "type": "string",
@@ -174,6 +175,36 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                 "required": [],
             },
             fn=_vision_export.export,
+            db=db,
+        ),
+        make_tool(
+            name="vision_compare",
+            description="当你需要同时对比多张图片并得出跨图结论时调用：找不同、判断哪张更符合要求、对比前后变化、联合分析多张截图/照片/票据。多张图片会在同一次 VL 请求中发送（模型同时看到全部图片，比逐张询问再自己拼结论更可靠），对比结论直接返回并落库。需要 2-16 张图片；同组图片（与顺序无关）+ 同一问题会命中组缓存。单张图片的描述与追问请用 vision_read。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "2-16 张图片的文件路径或文件夹路径，支持绝对路径、相对路径、~ 用户主目录。相同内容的图片会自动去重。",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "可选。对比问题，例如「哪张图的报错信息更严重」「两版 UI 有什么差异」。留空则使用默认对比分析 prompt（逐图要点→相同点→不同点→结论）。同一组图片+同一 question 命中组缓存，换问题重新对比。",
+                    },
+                    "force_reread": {
+                        "type": "boolean",
+                        "description": "可选。忽略组缓存强制重新对比。",
+                        "default": False,
+                    },
+                    "previous_result_id": {
+                        "type": "string",
+                        "description": "可选。追问模式：传入之前 vision_compare 的 result_id（cmp_ 前缀），基于之前对同一组图片的对比理解回答新问题。仅当本次图片组与之前完全相同（内容指纹一致）时生效。",
+                    },
+                },
+                "required": ["paths"],
+            },
+            fn=_vision_compare.compare,
             db=db,
         ),
         make_tool(

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from astrbot.api import logger
+
 _CONFIG: dict = {}
 _PLUGIN_DIR: str = ""
 _PROVIDERS: list[dict] = []
@@ -37,6 +39,39 @@ def get_vl_model_config() -> dict:
     return _CONFIG.get("vl_model", {})
 
 
+def get_max_batch() -> int:
+    """单次批量读图数量上限（账单保险丝）。
+
+    批量读图按张调用 VL 模型计费，误传大目录（如 C:\\）会产生失控费用。
+    非法值/0/负数回退默认 2000。"""
+    try:
+        v = int(_CONFIG.get("max_batch", 2000) or 2000)
+        return v if v > 0 else 2000
+    except (TypeError, ValueError):
+        logger.warning(f"max_batch 配置非法: {_CONFIG.get('max_batch')!r}，回退为 2000")
+        return 2000
+
+
+def _safe_timeout(value, default: float = 120.0) -> float:
+    """timeout 归一化：AstrBot provider_config 中可能是字符串/None/非法值，
+    下游 float() 或 httpx 收到会直接炸。"""
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        logger.warning(f"timeout 配置非法: {value!r}，回退为 {default}")
+        return default
+
+
+def _safe_int(value, default: int) -> int:
+    """整数配置归一化：手编 config.json 可能写入字符串/None/非法值，
+    下游 int() 收到会穿透成不透明的「工具执行失败」。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(f"整数配置非法: {value!r}，回退为 {default}")
+        return default
+
+
 def _provider_to_vl_config(provider: dict) -> dict:
     """将 AstrBot provider_config 转换为本插件使用的 VL 模型配置格式。"""
     keys = provider.get("key", [])
@@ -51,12 +86,13 @@ def _provider_to_vl_config(provider: dict) -> dict:
         "base_url": provider.get("api_base", "https://api.openai.com/v1"),
         "api_key": api_key,
         "model": provider.get("model", "gpt-4o"),
-        "timeout": provider.get("timeout", 120.0),
-        "concurrency": _CONFIG.get("vl_model", {}).get("concurrency", 50),
-        "max_retries": _CONFIG.get("vl_model", {}).get("max_retries", 2),
-        # detail 与 concurrency/max_retries 一样从全局 vl_model 继承，
-        # 否则走 provider 链时 WebUI 配置的 detail 不生效
+        "timeout": _safe_timeout(provider.get("timeout", 120.0)),
+        "concurrency": _safe_int(_CONFIG.get("vl_model", {}).get("concurrency", 50), 50),
+        "max_retries": _safe_int(_CONFIG.get("vl_model", {}).get("max_retries", 2), 2),
+        # detail / reasoning_effort 与 concurrency/max_retries 一样从全局 vl_model 继承，
+        # 否则走 provider 链时 WebUI 配置的 detail/思考强度不生效
         "detail": _CONFIG.get("vl_model", {}).get("detail", "auto"),
+        "reasoning_effort": _CONFIG.get("vl_model", {}).get("reasoning_effort", "low"),
     }
 
 
@@ -94,6 +130,10 @@ def resolve_provider_chain() -> list[dict]:
     # 回退到 vl_model 手动配置
     vl_model = _CONFIG.get("vl_model", {})
     if vl_model and vl_model.get("api_key"):
+        vl_model = dict(vl_model)
+        vl_model["timeout"] = _safe_timeout(vl_model.get("timeout", 120.0))
+        vl_model["max_retries"] = _safe_int(vl_model.get("max_retries", 2), 2)
+        vl_model["concurrency"] = _safe_int(vl_model.get("concurrency", 50), 50)
         return [vl_model]
 
     return []

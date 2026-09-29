@@ -376,6 +376,9 @@ class SQLiteVisionStore(VisionStore):
             return [dict(r) for r in rows]
 
     def get_by_result_id(self, result_id: str) -> dict | None:
+        """按 result_id 精确查询。只读不计数——hit_count 专属于缓存命中
+        （find_cached / find_cached_by_phash）：「查看」计数会把命中统计刷高，
+        污染 search 的 hit_count DESC 排序与 vision_query 展示的可信度。"""
         with self._lock:
             db = self._ensure_conn()
             db.row_factory = sqlite3.Row
@@ -384,16 +387,7 @@ class SQLiteVisionStore(VisionStore):
                 (result_id,),
             ).fetchone()
             db.row_factory = None
-            if row:
-                db.execute(
-                    "UPDATE image_cache SET hit_count = hit_count + 1, last_hit_at = ? WHERE result_id = ?",
-                    (datetime.now(timezone.utc).isoformat(), result_id),
-                )
-                db.commit()
-                d = dict(row)
-                d["hit_count"] = d.get("hit_count", 0) + 1
-                return d
-            return None
+            return dict(row) if row else None
 
     def get_by_filename(self, filename: str, limit: int = 20, offset: int = 0) -> list[dict]:
         with self._lock:
