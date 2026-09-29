@@ -582,6 +582,66 @@ def test_result_ids_cap10_reports_unlisted(tmp_path):
     db.close()
 
 
+def test_batch_hint_consistent_with_result_ids(tmp_path):
+    """hint 范围与 result_ids 同序同源（传入序）：起点=result_ids[0]、终点=result_ids[-1]——
+    不再是并发完成序的竞态产物（同一批图两次运行 hint 必须相同）。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    ids = []
+    paths = []
+    for i in range(5):
+        p = tmp_path / f"img_{i:02d}.png"
+        _make_test_image(str(p), size=(800 + i, 600))
+        rid = f"res_{i:02d}"
+        db.insert(
+            sha256=db.sha256_of_file(str(p)), filename=p.name, phash="",
+            model_id="fake-vl", question="", result_id=rid, source_value=str(p),
+            peek=str(i), text=str(i), tags=[], result_json={},
+        )
+        ids.append(rid)
+        paths.append(str(p))
+
+    async def _run():
+        return await vision_read.read(db, paths=paths)
+
+    r1 = asyncio.run(_run())
+    r2 = asyncio.run(_run())  # 同一批全命中跑两遍
+    for r in (r1, r2):
+        assert r["next_call"]["arguments"] == {"result_ids": ids}
+        assert f"范围: {ids[0]} ~ {ids[-1]}" in r["result_id_hint"]  # 传入序
+        assert "共 5 条" in r["result_id_hint"]
+    assert r1["result_id_hint"] == r2["result_id_hint"]  # 确定性：两次必须相同
+    db.close()
+
+
+def test_result_ids_dedup_same_content(tmp_path):
+    """相同内容的多个路径解析为同一记录（同 sha）：result_ids 去重保首现，
+    去重后只剩一条 → 走 result_id 单查分支（重复 id 对查询无意义）。"""
+    import shutil
+
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    a = tmp_path / "a.png"
+    _make_test_image(str(a))
+    dup = tmp_path / "中文 空格 名.PNG"  # 同内容不同文件名（反馈实测场景）
+    shutil.copy(str(a), str(dup))
+    db.insert(
+        sha256=db.sha256_of_file(str(a)), filename="a.png", phash="",
+        model_id="fake-vl", question="", result_id="res_same", source_value=str(a),
+        peek="同一图", text="同一", tags=[], result_json={},
+    )
+
+    async def _run():
+        return await vision_read.read(db, paths=[str(a), str(dup)])
+
+    result = asyncio.run(_run())
+    assert result["cached"] == 2
+    assert result["next_call"]["arguments"] == {"result_id": "res_same"}  # 去重后单条
+    db.close()
+
+
 def test_batch_all_cached_next_call_uses_result_ids(tmp_path):
     """批量全命中：next_call 用 result_ids 精确指向命中集合（顺序与传入一致），
     而非 recent=N 撞时间倒序的无关记录。"""

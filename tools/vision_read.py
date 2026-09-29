@@ -230,8 +230,6 @@ async def read(
     failed_count = 0
     decode_failed_count = 0  # 解码失败单独计数：与模型无关，不归因「VL 模型调用失败」
     failed_paths: list[str] = []
-    first_result_id = ""
-    last_result_id = ""
     semaphore = asyncio.Semaphore(concurrency)
     # 每张图的实际结果记录（命中给缓存 id、新读给新 id）：
     # 批量含命中时 next_call 用 result_ids 精确指向这批记录，而非 recent 撞运气
@@ -242,7 +240,7 @@ async def read(
     _httpx_client = httpx.AsyncClient(timeout=vl_timeout, limits=limits)
 
     async def _read_one(path: str) -> None:
-        nonlocal cached_count, phash_cached_count, read_count, failed_count, decode_failed_count, first_result_id, last_result_id
+        nonlocal cached_count, phash_cached_count, read_count, failed_count, decode_failed_count
 
         try:
             filename = os.path.basename(path)
@@ -264,14 +262,11 @@ async def read(
                 # 缓存按内容寻址（sha256），不含文件名：see_window 的时间戳截图也能命中
                 cached = await run_sync(db.find_cached, sha256, (primary or {}).get("model", ""), question, cache_detail)
             if cached:
-                # 命中路径也要登记 result_id：否则单图命中时 next_call 退化成
-                # {"recent": 1} 指向库中最新记录（可能是完全无关的图），污染 agent 上下文
+                # 命中路径登记 result_id（命中给缓存 id）：单图命中时 next_call
+                # 精确指向该记录，而非退化成 recent 指向库中最新记录（可能是无关图）
                 rid = cached.get("result_id", "")
                 if rid:
                     result_ids_by_path[path] = rid
-                    if not first_result_id:
-                        first_result_id = rid
-                    last_result_id = rid
                 cached_count += 1
                 return
 
@@ -289,9 +284,6 @@ async def read(
                     rid = cached.get("result_id", "")
                     if rid:
                         result_ids_by_path[path] = rid
-                        if not first_result_id:
-                            first_result_id = rid
-                        last_result_id = rid
                     cached_count += 1
                     phash_cached_count += 1
                     logger.info(
@@ -392,9 +384,6 @@ async def read(
             )
             read_count += 1
             result_ids_by_path[path] = result_id
-            if not first_result_id:
-                first_result_id = result_id
-            last_result_id = result_id
         except ImageDecodeError as e:
             # 解码失败（0 字节/截断/损坏）：单独计数，不归因模型失败
             logger.warning(f"图片解码失败 {path}: {e}")
@@ -447,11 +436,18 @@ async def read(
     else:
         status = "success"
 
-    # 与传入顺序一致的结果 id 序列（命中给缓存 id、新读给新 id；失败的不在内）
-    ordered_ids = [result_ids_by_path[p] for p in image_paths if p in result_ids_by_path]
+    # 与传入顺序一致的结果 id 序列（命中给缓存 id、新读给新 id；失败的不在内；
+    # 相同内容的多个路径解析为同一记录，去重保首现——重复 id 对查询无意义）。
+    # hint 与 next_call 都从这里构造：ordered_ids 是传入序（确定性），
+    # 不用「谁先完成谁当 first」的并发完成序变量（竞态产物，两次跑结果不同）。
+    ordered_ids: list = []
+    for p in image_paths:
+        rid = result_ids_by_path.get(p)
+        if rid and rid not in ordered_ids:
+            ordered_ids.append(rid)
 
     result_id_hint = ""
-    if first_result_id and last_result_id:
+    if ordered_ids:
         # 三态文案：纯新读=新结果 / 纯命中=命中结果 / 混合=结果（混合批量下
         # 范围起点可能是命中记录，写「新结果」自相矛盾）
         if read_count > 0 and cached_count > 0:
@@ -460,15 +456,18 @@ async def read(
             label = "新结果"
         else:
             label = "命中结果"
-        if first_result_id == last_result_id:
-            result_id_hint = f"{label} result_id: {first_result_id}"
+        if len(ordered_ids) == 1:
+            result_id_hint = f"{label} result_id: {ordered_ids[0]}"
         else:
-            result_id_hint = f"{label} result_id 范围: {first_result_id} ~ {last_result_id}"
+            result_id_hint = (
+                f"{label} result_id 范围: {ordered_ids[0]} ~ {ordered_ids[-1]}"
+                f"（按传入顺序，共 {len(ordered_ids)} 条）"
+            )
 
     next_args: dict = {}
-    if first_result_id and last_result_id and first_result_id == last_result_id:
-        # 单图（命中或新读）：目标明确，直接 full 查这条
-        next_args = {"result_id": first_result_id}
+    if len(ordered_ids) == 1:
+        # 单条结果（单图，或同内容多路径去重后）：目标明确，直接 full 查这条
+        next_args = {"result_id": ordered_ids[0]}
     elif cached_count > 0 and ordered_ids:
         # 批量含命中（纯命中/混合）：result_ids 精确指向本次涉及的记录——
         # recent=N 按时间倒序会撞上无关的最新记录，把命中集合漏掉

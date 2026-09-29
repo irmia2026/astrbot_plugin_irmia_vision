@@ -1,5 +1,12 @@
 # 更新日志
 
+## 1.1.8
+
+### 修复
+
+- **`result_id_hint` 范围是并发竞态产物（试用反馈，实证同一批图两次运行范围不同）**：`first/last_result_id` 是「谁先完成谁当 first」的并发完成序，而同一响应体里 `result_ids` 是传入序——两者语义打架，且 hint 终点可能是 cap 之外的记录（与 `unlisted_count` 自相矛盾）。现 hint 与 next_call 统一从 `ordered_ids`（传入序，确定性）构造：范围=「`result_ids[0]` ~ `result_ids[-1]`（按传入顺序，共 N 条）」。`first/last_result_id` 变量整体删除（单图判断改用 `len(ordered_ids)==1`），不留竞态污染源。
+- **`result_ids` 重复 id 去重（保首现）**：相同内容的多个路径解析为同一记录（同 sha 同 question），重复 id 对查询无意义（agent 会重复拿到同一条）。去重后只剩一条时走 `result_id` 单查分支。
+
 ## 1.1.7
 
 ### 修复
