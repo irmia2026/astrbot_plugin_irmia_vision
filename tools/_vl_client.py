@@ -22,6 +22,13 @@ MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 压缩后上传 payload 上限 20MB（不�
 
 class ImageTooLargeError(ValueError):
     """压缩后仍超过上传限制。调用方不应重试或降级——结果不会变。"""
+
+
+class ImageDecodeError(ValueError):
+    """图片无法解码（0 字节/截断/格式损坏）。与模型无关——重试与降级都无意义，
+    不应归因「VL 模型调用失败」，也不应每张坏图都跑一遍完整降级链。"""
+
+
 TARGET_LONG_EDGE = 2048
 TARGET_QUALITY = 85
 
@@ -152,48 +159,55 @@ def effective_target_edge(model: str, detail: str) -> int | None:
 def _compress_image(path: str, target_long_edge: int | None = TARGET_LONG_EDGE, quality: int = TARGET_QUALITY) -> tuple[bytes, str]:
     """压缩图片到指定长边，返回字节和 MIME 类型。target_long_edge=None 时不缩放。"""
     ext = Path(path).suffix.lower()
-    with Image.open(path) as img:
-        # 处理动画 gif 的第一帧
-        if getattr(img, "is_animated", False):
-            img.seek(0)
+    try:
+        with Image.open(path) as img:
+            # 处理动画 gif 的第一帧
+            if getattr(img, "is_animated", False):
+                img.seek(0)
 
-        # 转换为 RGB 以统一处理
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
+            # 转换为 RGB 以统一处理
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
 
-        w, h = img.size
-        if target_long_edge is not None and max(w, h) > target_long_edge:
-            ratio = target_long_edge / max(w, h)
-            new_size = (int(w * ratio), int(h * ratio))
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
+            w, h = img.size
+            if target_long_edge is not None and max(w, h) > target_long_edge:
+                ratio = target_long_edge / max(w, h)
+                new_size = (int(w * ratio), int(h * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-        if ext in (".jpg", ".jpeg"):
-            fmt = "JPEG"
-            mime = "image/jpeg"
-        elif ext == ".webp":
-            fmt = "WEBP"
-            mime = "image/webp"
-        elif ext == ".gif":
-            fmt = "JPEG"  # gif 压缩为 jpeg
-            mime = "image/jpeg"
-        elif ext == ".bmp":
-            fmt = "JPEG"
-            mime = "image/jpeg"
-        else:
-            fmt = "PNG"
-            mime = "image/png"
+            if ext in (".jpg", ".jpeg"):
+                fmt = "JPEG"
+                mime = "image/jpeg"
+            elif ext == ".webp":
+                fmt = "WEBP"
+                mime = "image/webp"
+            elif ext == ".gif":
+                fmt = "JPEG"  # gif 压缩为 jpeg
+                mime = "image/jpeg"
+            elif ext == ".bmp":
+                fmt = "JPEG"
+                mime = "image/jpeg"
+            else:
+                fmt = "PNG"
+                mime = "image/png"
 
-        buf = io.BytesIO()
-        if fmt in ("JPEG", "WEBP"):
-            img.save(buf, format=fmt, quality=quality)
-        else:
-            img.save(buf, format=fmt)
-        data = buf.getvalue()
-        # 大小限制作用于压缩后的实际上传内容，而非原始文件：
-        # 一张 25MB 的照片压缩到长边 2048 后通常只有 1-2MB，完全可以正常上传。
-        if len(data) > MAX_IMAGE_SIZE:
-            raise ImageTooLargeError(f"图片压缩后仍超过 20MB 上传限制: {path}")
-        return data, mime
+            buf = io.BytesIO()
+            if fmt in ("JPEG", "WEBP"):
+                img.save(buf, format=fmt, quality=quality)
+            else:
+                img.save(buf, format=fmt)
+            data = buf.getvalue()
+            # 大小限制作用于压缩后的实际上传内容，而非原始文件：
+            # 一张 25MB 的照片压缩到长边 2048 后通常只有 1-2MB，完全可以正常上传。
+            if len(data) > MAX_IMAGE_SIZE:
+                raise ImageTooLargeError(f"图片压缩后仍超过 20MB 上传限制: {path}")
+            return data, mime
+    except ImageTooLargeError:
+        raise
+    except Exception as e:
+        # PIL 惰性加载：截断文件可能在 convert/save 阶段才炸——
+        # 整个解码+压缩过程统一归因为图片损坏，与模型无关
+        raise ImageDecodeError(f"图片无法解码: {path}: {e}") from e
 
 
 def encode_image(path: str, target_long_edge: int | None = TARGET_LONG_EDGE) -> str:

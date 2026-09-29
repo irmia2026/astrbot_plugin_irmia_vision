@@ -1,5 +1,14 @@
 # 更新日志
 
+## 1.1.7
+
+### 修复
+
+- **`sorted(set())` 抹掉传入顺序（试用反馈，最危险）**：`_collect_image_paths` 按字典序重排路径——`vision_compare` 的图1/图2 编号被调换，before/after 对比**静默给出反向结论还落库**（实测：[zz_red, aa_blue] 传入，模型收到的图1 是 aa_blue）。现保持传入顺序（`dict.fromkeys` 首现去重），目录展开时内部排序保确定性；`vision_read` 的 `result_ids` 顺序同样跟随传入。工具描述注明「传入顺序即编号顺序」。
+- **相对路径静默丢弃**：`os.path.exists` 按 AstrBot 进程 CWD 解析（agent 猜不到），找不到就丢弃且不回显。现 `_collect_image_paths` 返回 `(found, missing)`：未找到/格式不支持的传入路径在报错中列出（并点明相对路径基准），成功响应带 `missing_paths`——静默丢图会让对比/批量结论基于不完整集合。
+- **坏图错误归因**：0 字节/截断图片此前被判为「所有 VL 模型均调用失败」并 dump provider 链+密钥状态，且每张坏图都跑一遍完整降级链才认输、返回体还丢 `failed` 计数。新增 `ImageDecodeError` 分层（PIL 惰性加载，整个解码+压缩过程统一归因）：解码失败单独计 `decode_failed`，不重试、不降级、不归因模型，响应保留 `failed` 计数。
+- **`result_ids` cap 10 静默截断**：超出 10 条时响应带 `unlisted_count` 并在 proposal 说明总数（试用反馈：15 张场景 5 张通过 next_call 永远够不着，且不告知）。
+
 ## 1.1.6
 
 ### 修复

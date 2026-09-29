@@ -29,6 +29,7 @@ from ._helpers import proposal_reply, run_sync
 from ._store import VisionStore
 from ._vl_client import (
     MAX_COMPARE_IMAGES,
+    ImageDecodeError,
     ImageTooLargeError,
     OutputTruncatedError,
     effective_target_edge,
@@ -74,10 +75,10 @@ def _group_sha256(member_sha256s: list[str]) -> str:
     return "grp_" + h.hexdigest()
 
 
-def _ok_reply(*, result_id: str, peek: str, text: str, tags: list, members: list[dict], question: str, cached: bool) -> dict:
+def _ok_reply(*, result_id: str, peek: str, text: str, tags: list, members: list[dict], question: str, cached: bool, missing: list | None = None) -> dict:
     """对比场景与 vision_read 不同：结论就是交付物，直接返回（4000 字上限保护上下文），
     同时已落库，可用 result_id 在 vision_query 复查完整记录。"""
-    return {
+    reply = {
         "ok": True,
         "status": "cached" if cached else "success",
         "result_id": result_id,
@@ -94,6 +95,10 @@ def _ok_reply(*, result_id: str, peek: str, text: str, tags: list, members: list
             "arguments": {"result_id": result_id},
         },
     }
+    if missing:
+        # 静默丢图会让对比结论基于不完整集合——必须回显
+        reply["missing_paths"] = missing
+    return reply
 
 
 async def compare(
@@ -103,12 +108,16 @@ async def compare(
     force_reread: bool = False,
     previous_result_id: str = "",
 ) -> dict:
-    image_paths = _collect_image_paths(paths)
+    image_paths, missing = _collect_image_paths(paths)
     if len(image_paths) < 2:
+        detail = (
+            f"未找到或不支持的路径: {missing}。相对路径按 AstrBot 进程工作目录解析，建议用绝对路径或 ~。"
+            if missing else ""
+        )
         return proposal_reply(
             False,
-            f"多图对比至少需要 2 张图片（找到 {len(image_paths)} 张）。请确认路径存在且包含 png/jpg/jpeg/webp/gif/bmp 图片。",
-            options=["检查路径是否正确", "单张图片追问用 vision_read"],
+            f"多图对比至少需要 2 张图片（找到 {len(image_paths)} 张）。请确认路径存在且包含 png/jpg/jpeg/webp/gif/bmp 图片。" + detail,
+            options=["检查路径是否正确", "使用绝对路径或 ~ 家目录", "单张图片追问用 vision_read"],
         )
     if len(image_paths) > MAX_COMPARE_IMAGES:
         return proposal_reply(
@@ -172,6 +181,7 @@ async def compare(
                 members=members,
                 question=question,
                 cached=True,
+                missing=missing,
             )
 
     # 不在组缓存命中之前拦截空链：命中缓存不需要 VL 配置；走到这里才必须要求模型可用
@@ -224,6 +234,13 @@ async def compare(
                     # 直接返回会掐死 fallback → break 进降级链
                     last_err = e
                     break
+                except ImageDecodeError as e:
+                    # 图片损坏：与模型无关，重试/降级结果都一样，直接返回
+                    return proposal_reply(
+                        False,
+                        f"图片无法解码: {e}",
+                        options=["检查图片文件是否完整", "移除损坏图片后重试"],
+                    )
                 except OutputTruncatedError as e:
                     # 额度已在客户端内部放大重试过，同一模型重试无意义；降级换模型可能成功
                     last_err = e
@@ -295,4 +312,5 @@ async def compare(
         members=members,
         question=question,
         cached=False,
+        missing=missing,
     )

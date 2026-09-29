@@ -17,6 +17,7 @@ from PIL import Image
 from ._helpers import proposal_reply, run_sync
 from ._store import VisionStore
 from ._vl_client import (
+    ImageDecodeError,
     ImageTooLargeError,
     OutputTruncatedError,
     effective_target_edge,
@@ -58,21 +59,33 @@ STRUCTURED_SUFFIX_QUESTION = (
 )
 
 
-def _collect_image_paths(paths: list[str]) -> list[str]:
+def _collect_image_paths(paths: list[str]) -> tuple[list[str], list[str]]:
+    """收集图片路径，返回 (找到的图片, 未找到/不支持的传入路径)。
+
+    顺序契约：保持传入顺序（顶层路径的顺序即用户意图——compare 的图1/图2 编号
+    依赖它，before/after 不能被字典序静默调换）；目录展开时内部排序保确定性；
+    按首现去重。相对路径按 AstrBot 进程 CWD 解析（agent 难以预测）——
+    丢弃的路径必须回显，不能静默。"""
     results: list[str] = []
+    missing: list[str] = []
     for p in paths:
         expanded = os.path.expanduser(p)
         if not os.path.exists(expanded):
+            missing.append(p)
             continue
         if os.path.isdir(expanded):
+            found = []
             for root, _, files in os.walk(expanded):
                 for f in files:
                     if Path(f).suffix.lower() in SUPPORTED_EXTS:
-                        results.append(os.path.join(root, f))
+                        found.append(os.path.join(root, f))
+            results.extend(sorted(found))  # 目录内排序保确定性
         else:
             if Path(expanded).suffix.lower() in SUPPORTED_EXTS:
                 results.append(expanded)
-    return sorted(set(results))
+            else:
+                missing.append(p)  # 存在但格式不支持，同样回显
+    return list(dict.fromkeys(results)), missing
 
 
 def _compute_phash(path: str) -> str:
@@ -169,12 +182,18 @@ async def read(
     previous_result_id: str = "",
     allow_phash: bool = True,
 ) -> dict:
-    image_paths = _collect_image_paths(paths)
+    image_paths, missing = _collect_image_paths(paths)
     if not image_paths:
+        detail = ""
+        if missing:
+            detail = (
+                f"未找到或不支持的路径: {missing}。"
+                "注意：相对路径按 AstrBot 进程的工作目录解析（不是对话中的目录），建议用绝对路径或 ~。"
+            )
         return proposal_reply(
             False,
-            "未找到任何支持的图片文件。请确认路径存在，并且包含 png/jpg/jpeg/webp/gif/bmp 格式的图片。",
-            options=["检查路径是否正确", "使用 vision_query 查看已有结果"],
+            "未找到任何支持的图片文件。请确认路径存在，并且包含 png/jpg/jpeg/webp/gif/bmp 格式的图片。" + detail,
+            options=["检查路径是否正确", "使用绝对路径或 ~ 家目录", "使用 vision_query 查看已有结果"],
         )
     # 账单保险丝：批量读图按张调用 VL 模型计费，误传大目录会产生失控费用
     max_batch = get_max_batch()
@@ -209,6 +228,7 @@ async def read(
     phash_cached_count = 0
     read_count = 0
     failed_count = 0
+    decode_failed_count = 0  # 解码失败单独计数：与模型无关，不归因「VL 模型调用失败」
     failed_paths: list[str] = []
     first_result_id = ""
     last_result_id = ""
@@ -222,7 +242,7 @@ async def read(
     _httpx_client = httpx.AsyncClient(timeout=vl_timeout, limits=limits)
 
     async def _read_one(path: str) -> None:
-        nonlocal cached_count, phash_cached_count, read_count, failed_count, first_result_id, last_result_id
+        nonlocal cached_count, phash_cached_count, read_count, failed_count, decode_failed_count, first_result_id, last_result_id
 
         try:
             filename = os.path.basename(path)
@@ -317,6 +337,8 @@ async def read(
                             # 降级到更小档位的模型可能通过 → break 进降级链
                             last_err = e
                             break
+                        except ImageDecodeError:
+                            raise  # 图片损坏：与模型无关，不重试不降级，直接出循环
                         except OutputTruncatedError as e:
                             # 额度已在客户端内部放大重试过，同一模型重试无意义；
                             # 但截断是模型相关的（思考型模型易触发），降级换模型可能成功
@@ -373,6 +395,12 @@ async def read(
             if not first_result_id:
                 first_result_id = result_id
             last_result_id = result_id
+        except ImageDecodeError as e:
+            # 解码失败（0 字节/截断/损坏）：单独计数，不归因模型失败
+            logger.warning(f"图片解码失败 {path}: {e}")
+            decode_failed_count += 1
+            if len(failed_paths) < 10:
+                failed_paths.append(f"{path}: {e}")
         except Exception as e:
             err_msg = str(e)
             logger.warning(f"读图失败 {path}: {e}")
@@ -385,21 +413,36 @@ async def read(
     finally:
         await _httpx_client.aclose()
 
-    if read_count == 0 and cached_count == 0 and failed_count > 0:
+    total_failed = failed_count + decode_failed_count
+    if read_count == 0 and cached_count == 0 and total_failed > 0:
+        if failed_count == 0:
+            # 全是解码失败：与模型无关——不归因模型、不 dump provider 链，并保留 failed 计数
+            return proposal_reply(
+                False,
+                f"{decode_failed_count} 张图片无法解码（文件损坏/0 字节/格式不支持），未调用 VL 模型。",
+                error=failed_paths[0] if failed_paths else "",
+                options=["检查图片文件是否完整", "移除损坏文件后重试"],
+                failed=decode_failed_count,
+                failed_paths=failed_paths,
+            )
         chain_desc = [
             f"{c.get('model','?')}@{c.get('base_url','')[:40]} key={'有' if c.get('api_key') else '无'}"
             for c in chain
         ]
         err_detail = " | ".join(failed_paths[:3]) or "无错误详情"
-        return proposal_reply(
+        fail_reply = proposal_reply(
             False,
             "所有 VL 模型均调用失败。chain=" + "; ".join(chain_desc) + " | 错误: " + err_detail,
             options=["检查模型配置", "使用 vision_query 查询已缓存结果"],
         )
+        fail_reply["failed"] = total_failed
+        if decode_failed_count:
+            fail_reply["decode_failed"] = decode_failed_count
+        return fail_reply
 
-    if failed_count > 0 and read_count == 0 and cached_count == 0:
+    if total_failed > 0 and read_count == 0 and cached_count == 0:
         status = "failed"
-    elif failed_count > 0:
+    elif total_failed > 0:
         status = "partial"
     else:
         status = "success"
@@ -441,13 +484,22 @@ async def read(
         "total": len(image_paths),
         "cached": cached_count,
         "read": read_count,
-        "failed": failed_count,
+        "failed": total_failed,
         "proposal": "读图完成。请调用 vision_query 查看具体结果。",
         "next_call": {
             "tool": "vision_query",
             "arguments": next_args,
         },
     }
+    if decode_failed_count:
+        reply["decode_failed"] = decode_failed_count
+    if missing:
+        # 部分传入路径未找到/不支持：必须回显，静默丢图会让 agent 基于不完整集合下结论
+        reply["missing_paths"] = missing
+    if cached_count > 0 and len(ordered_ids) > 10:
+        # result_ids cap 10 的截断必须告知，否则超出的记录通过 next_call 永远够不着
+        reply["unlisted_count"] = len(ordered_ids) - 10
+        reply["proposal"] += f"（本次共 {len(ordered_ids)} 条记录，next_call 列出前 10 个 result_id，其余可按 path/query 查询）"
     if result_id_hint:
         reply["result_id_hint"] = result_id_hint
     if phash_cached_count > 0:

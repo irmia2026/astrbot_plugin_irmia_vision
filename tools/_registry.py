@@ -67,7 +67,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     "paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "图片文件路径或文件夹路径列表，支持绝对路径、相对路径、~ 用户主目录。例如 [\"C:/Users/me/Pictures/invoice.png\", \"~/Pictures\"]",
+                        "description": "图片文件路径或文件夹路径列表。优先用绝对路径或 ~ 用户主目录；相对路径按 AstrBot 进程的工作目录解析（难以预测，不推荐）。例如 [\"C:/Users/me/Pictures/invoice.png\", \"~/Pictures\"]",
                     },
                     "question": {
                         "type": "string",
@@ -191,7 +191,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     "paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "2-16 张图片的文件路径或文件夹路径，支持绝对路径、相对路径、~ 用户主目录。相同内容的图片会自动去重。",
+                        "description": "2-16 张图片的文件路径或文件夹路径。优先用绝对路径或 ~ 用户主目录（相对路径按 AstrBot 进程工作目录解析，不推荐）。相同内容的图片会自动去重。传入顺序即图1/图2…的编号顺序（before/after 对比时请注意顺序）。",
                     },
                     "question": {
                         "type": "string",

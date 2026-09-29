@@ -250,6 +250,94 @@ def test_compare_follow_up_ignores_different_group(tmp_path):
     assert "之前对这组图片的对比理解" not in calls[-1]["prompt"]
 
 
+def test_compare_preserves_input_order(tmp_path):
+    """图1/图2 编号按传入顺序，不被文件名字典序调换（before/after 静默反向结论的修复）。"""
+    from tools import vision_compare
+
+    db = _setup_fake_vl(tmp_path)
+    _make_image(str(tmp_path / "zz_first.png"), (255, 0, 0))
+    _make_image(str(tmp_path / "aa_second.png"), (0, 0, 255))
+
+    calls = []
+    original = vision_compare.vl_read_images
+
+    async def _run():
+        vision_compare.vl_read_images = _fake_vl_factory(calls)
+        try:
+            # 传入顺序与文件名字典序相反
+            return await vision_compare.compare(
+                db, paths=[str(tmp_path / "zz_first.png"), str(tmp_path / "aa_second.png")]
+            )
+        finally:
+            vision_compare.vl_read_images = original
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["ok"] is True
+    labels = calls[0]["labels"]
+    assert "zz_first.png" in labels[0]  # 图1 = 传入第一张
+    assert "aa_second.png" in labels[1]
+    assert result["filenames"] == ["zz_first.png", "aa_second.png"]  # 返回同样保序
+
+
+def test_compare_decode_error_fast_fail(tmp_path):
+    """坏图：直接报「无法解码」，不走降级链、不归因模型、不调 VL。"""
+    from tools import vision_compare
+
+    db = _setup_fake_vl(tmp_path)
+    _make_image(str(tmp_path / "a.png"), (255, 0, 0))
+    (tmp_path / "broken.png").write_bytes(b"")
+
+    calls = []
+    original = vision_compare.vl_read_images
+
+    async def fake_vl(paths, prompt, *, labels=None, max_tokens=8192, client=None, vl_config=None, json_mode=False, image_urls=None):
+        calls.append(1)
+        return '{"peek": "x", "text": "y", "tags": []}'
+
+    async def _run():
+        vision_compare.vl_read_images = fake_vl
+        try:
+            return await vision_compare.compare(
+                db, paths=[str(tmp_path / "a.png"), str(tmp_path / "broken.png")]
+            )
+        finally:
+            vision_compare.vl_read_images = original
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["ok"] is False
+    assert "无法解码" in result["proposal"]
+    assert len(calls) == 0  # VL 未被调用
+
+
+def test_compare_missing_paths_reported(tmp_path):
+    """部分传入路径未找到：结果带 missing_paths 回显（不静默丢图导致结论基于不完整集合）。"""
+    from tools import vision_compare
+
+    db = _setup_fake_vl(tmp_path)
+    _make_image(str(tmp_path / "a.png"), (255, 0, 0))
+    _make_image(str(tmp_path / "b.png"), (0, 255, 0))
+
+    calls = []
+    original = vision_compare.vl_read_images
+
+    async def _run():
+        vision_compare.vl_read_images = _fake_vl_factory(calls)
+        try:
+            return await vision_compare.compare(
+                db, paths=[str(tmp_path / "a.png"), str(tmp_path / "ghost.png"), str(tmp_path / "b.png")]
+            )
+        finally:
+            vision_compare.vl_read_images = original
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["ok"] is True
+    assert result["images"] == 2
+    assert result["missing_paths"] == [str(tmp_path / "ghost.png")]
+
+
 def test_compare_max_images_guard(tmp_path):
     """超过单次对比上限时明确报错，不调 VL。"""
     from tools import vision_compare

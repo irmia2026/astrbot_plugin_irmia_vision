@@ -25,11 +25,41 @@ def test_collect_image_paths():
         open(img3, "wb").close()
         open(txt, "w").close()
 
-        paths = _collect_image_paths([tmpdir])
-        assert sorted(paths) == sorted([img1, img2, img3])
+        found, missing = _collect_image_paths([tmpdir])
+        assert found == sorted([img1, img2, img3])  # 目录内排序保确定性
+        assert missing == []
 
-        paths = _collect_image_paths([os.path.join(tmpdir, "a.png")])
-        assert paths == [img1]
+        found, missing = _collect_image_paths([os.path.join(tmpdir, "a.png")])
+        assert found == [img1]
+        assert missing == []
+
+        # 未找到与格式不支持的传入路径都必须回显（相对路径静默丢弃的修复）
+        found, missing = _collect_image_paths([os.path.join(tmpdir, "nope.png"), txt])
+        assert found == []
+        assert len(missing) == 2
+
+
+def test_collect_image_paths_preserves_input_order(tmp_path):
+    """顶层顺序 = 传入顺序（compare 的图1/图2 编号依赖它，before/after 不能被字典序调换）；
+    目录内排序保确定性；首现去重。"""
+    a = str(tmp_path / "aa_second.png")
+    z = str(tmp_path / "zz_first.png")
+    open(a, "wb").close()
+    open(z, "wb").close()
+    found, missing = _collect_image_paths([z, a])  # 传入顺序与字典序相反
+    assert found == [z, a]
+    # 目录 + 文件混合：目录内 sorted，顶层保传入序
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    s1 = str(sub / "m.png")
+    s2 = str(sub / "b.png")
+    open(s1, "wb").close()
+    open(s2, "wb").close()
+    found, _ = _collect_image_paths([z, str(sub), a])
+    assert found == [z, s2, s1, a]
+    # 首现去重
+    found, _ = _collect_image_paths([z, a, z])
+    assert found == [z, a]
 
 
 def test_parse_result():
@@ -462,6 +492,94 @@ def test_empty_structured_content_not_stored(tmp_path):
             db.close()
 
     asyncio.run(_run())
+
+
+def test_decode_failure_not_attributed_to_model(tmp_path):
+    """坏图（0 字节）：不归因模型失败、不 dump provider 链、不调 VL、保留 failed 计数。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"")  # 0 字节
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        raise AssertionError("坏图不应触发 VL 调用")
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            return await vision_read.read(db, paths=[str(broken)])
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["ok"] is False
+    assert "无法解码" in result["proposal"]
+    assert "VL 模型均调用失败" not in result["proposal"]  # 不归因模型
+    assert "chain=" not in result["proposal"]  # 不 dump provider 链
+    assert result["failed"] == 1  # 保留计数
+
+
+def test_partial_decode_failure_counts(tmp_path):
+    """1 好 1 坏：status=partial，decode_failed 单独计数，好图正常落库。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    good = tmp_path / "good.png"
+    _make_test_image(str(good))
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"truncated")
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        return '{"peek": "好图", "text": "正文", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            return await vision_read.read(db, paths=[str(good), str(broken)])
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["ok"] is True
+    assert result["status"] == "partial"
+    assert result["read"] == 1
+    assert result["failed"] == 1
+    assert result["decode_failed"] == 1
+
+
+def test_result_ids_cap10_reports_unlisted(tmp_path):
+    """12 张全命中：result_ids 列前 10 个，unlisted_count 告知剩余（不再静默截断）。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    paths = []
+    for i in range(12):
+        p = tmp_path / f"img_{i:02d}.png"
+        _make_test_image(str(p), size=(800 + i, 600))
+        db.insert(
+            sha256=db.sha256_of_file(str(p)), filename=p.name, phash="",
+            model_id="fake-vl", question="", result_id=f"res_{i:02d}", source_value=str(p),
+            peek=str(i), text=str(i), tags=[], result_json={},
+        )
+        paths.append(str(p))
+
+    async def _run():
+        return await vision_read.read(db, paths=paths)
+
+    result = asyncio.run(_run())
+    assert result["cached"] == 12
+    args = result["next_call"]["arguments"]
+    assert len(args["result_ids"]) == 10
+    assert result["unlisted_count"] == 2
+    assert "共 12 条" in result["proposal"]
+    db.close()
 
 
 def test_batch_all_cached_next_call_uses_result_ids(tmp_path):
