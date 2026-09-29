@@ -67,7 +67,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     "paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "图片文件路径或文件夹路径列表。优先用绝对路径或 ~ 用户主目录；相对路径按 AstrBot 进程的工作目录解析（难以预测，不推荐）。例如 [\"C:/Users/me/Pictures/invoice.png\", \"~/Pictures\"]",
+                        "description": "图片文件路径或文件夹路径列表。请使用绝对路径或 ~ 用户主目录——相对路径按 AstrBot 进程的工作目录解析（agent 无法可靠预测，极易落空）。例如 [\"C:/Users/me/Pictures/invoice.png\", \"~/Pictures\"]",
                     },
                     "question": {
                         "type": "string",
@@ -113,7 +113,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     },
                     "query": {
                         "type": "string",
-                        "description": "自然语言搜索关键词，会在摘要、文字、标签、文件名、路径中模糊搜索。返回 list 模式：只包含 result_id、filename、peek、question（轻量预览）。",
+                        "description": "字面子串搜索（非语义搜索）：在摘要/正文/标签/文件名/路径中查找；空格或逗号分隔多个关键词为 AND（每个词都需命中，词序无关）；按读取时间倒序。返回 list 模式：只包含 result_id、filename、peek、question（轻量预览）。",
                     },
                     "recent": {
                         "type": "integer",
@@ -191,7 +191,7 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                     "paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "2-16 张图片的文件路径或文件夹路径。优先用绝对路径或 ~ 用户主目录（相对路径按 AstrBot 进程工作目录解析，不推荐）。相同内容的图片会自动去重。传入顺序即图1/图2…的编号顺序（before/after 对比时请注意顺序）。",
+                        "description": "2-16 张图片的文件路径或文件夹路径。请使用绝对路径或 ~ 用户主目录（相对路径按 AstrBot 进程工作目录解析，极易落空）。相同内容的图片会自动去重。传入顺序即图1/图2…的编号顺序（before/after 对比时请注意顺序）。",
                     },
                     "question": {
                         "type": "string",

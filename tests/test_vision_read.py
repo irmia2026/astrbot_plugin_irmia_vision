@@ -62,6 +62,36 @@ def test_collect_image_paths_preserves_input_order(tmp_path):
     assert found == [z, a]
 
 
+def test_parse_result_multi_object_merged():
+    """模型把结果拆成两段 JSON（peek/text 一段、tags 一段）→ raw_decode 多对象合并救回。
+    （实测 r08：贪婪 \\{.*\\} 把两段拼成非法 JSON，peek 落库成 200+ 字 JSON 噪声、tags 丢空）"""
+    raw = '{"peek": "一张纯暗红褐色背景图", "text": "整张图片为单一纯色背景"}\n{"tags": ["纯色背景", "酒红色"]}'
+    parsed = _parse_result(raw)
+    assert parsed["peek"] == "一张纯暗红褐色背景图"
+    assert parsed["text"] == "整张图片为单一纯色背景"
+    assert parsed["tags"] == ["纯色背景", "酒红色"]  # tags 不再丢失
+    assert parsed["parse_fallback"] is False
+
+
+def test_parse_result_fullwidth_punct_recovered():
+    """全角标点（中文模型高发，实测 r05 因此整体非法）→ 归一半角后救回。"""
+    raw = '{"peek": "纯红色背景图"，"text"："无法从可见内容判断。"，"tags": ["R5", "红色"]}'
+    parsed = _parse_result(raw)
+    assert parsed["peek"] == "纯红色背景图"
+    assert parsed["text"] == "无法从可见内容判断。"
+    assert parsed["tags"] == ["R5", "红色"]
+    assert parsed["parse_fallback"] is False
+
+
+def test_parse_result_fallback_salvages_peek_field():
+    """整段非法 JSON 时：正则捞出 peek 字段当预览，而非把整段 JSON 原文塞进上下文。"""
+    raw = '{"peek": "一张纯暗红褐色（酒红）背景图", "text": "破损的'
+    parsed = _parse_result(raw)
+    assert parsed["peek"] == "一张纯暗红褐色（酒红）背景图"
+    assert not parsed["peek"].startswith("{")  # 不再是 JSON 原文
+    assert parsed["parse_fallback"] is True
+
+
 def test_parse_result():
     raw = "第一行摘要\n第二行细节\n第三行文字"
     parsed = _parse_result(raw)
@@ -375,9 +405,9 @@ def test_parse_result_json_only_tags():
     assert parsed["tags"] == ["a", "b"]
 
 
-def test_batch_read_next_call_is_list_mode(tmp_path):
-    """批量读图后 next_call 应引导 list 模式（recent），不能夹带 result_id
-    （否则 vision_query 会优先走 full，agent 只能看到第一张的详情）。"""
+def test_batch_read_next_call_uses_result_ids(tmp_path):
+    """纯新读批量：next_call 给 result_ids（传入序，list 模式浏览）——
+    不再给 recent（时间倒序会撞无关记录，>10 张时静默截断）。"""
     from tools import vision_read
 
     db, db_path = _setup_fake_vl(tmp_path)
@@ -397,13 +427,85 @@ def test_batch_read_next_call_is_list_mode(tmp_path):
             )
             assert result["read"] == 2
             args = result["next_call"]["arguments"]
-            assert args == {"recent": 2}
-            assert "result_id" not in args
+            assert "result_ids" in args
+            assert len(args["result_ids"]) == 2
+            assert "result_id" not in args  # 不夹带单条 full
+            assert "recent" not in args
+            # 两条都是新落库的记录
+            for rid in args["result_ids"]:
+                assert db.get_by_result_id(rid) is not None
         finally:
             vision_read.vl_read_image = original_vl
             db.close()
 
     asyncio.run(_run())
+
+
+def test_fresh_batch_over10_uses_result_ids_with_unlisted(tmp_path):
+    """纯新读 11 张：result_ids 列前 10 + unlisted_count=1 + proposal/hint 说明总数——
+    不再 recent=10 静默截断（实测：11 条时 read_at 最早的那条稳定漏掉）。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    paths = []
+    for i in range(11):
+        p = tmp_path / f"fresh_{i:02d}.png"
+        _make_test_image(str(p), size=(800 + i, 600))
+        paths.append(str(p))
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        return '{"peek": "新", "text": "新", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            return await vision_read.read(db, paths=paths)
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["read"] == 11
+    args = result["next_call"]["arguments"]
+    assert "result_ids" in args
+    assert len(args["result_ids"]) == 10
+    assert result["unlisted_count"] == 1
+    assert "共 11 条" in result["proposal"]
+    assert "共 11 条" in result["result_id_hint"]  # hint 与 next_call 同源，不自相矛盾
+
+
+def test_read_multi_object_json_recovers_tags(tmp_path):
+    """集成：模型输出两段 JSON（peek/text + tags 分离）→ 合并解析，tags 落库不丢失。"""
+    import json as _json
+
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    img_path = str(tmp_path / "doc.png")
+    _make_test_image(img_path)
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        return '{"peek": "分段预览", "text": "分段正文"}\n{"tags": ["分段", "合并"]}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            return await vision_read.read(db, paths=[img_path])
+        finally:
+            vision_read.vl_read_image = original_vl
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["read"] == 1
+    rid = result["next_call"]["arguments"]["result_id"]
+    row = db.get_by_result_id(rid)
+    assert row["peek"] == "分段预览"
+    assert _json.loads(row["tags"]) == ["分段", "合并"]
+    assert _json.loads(row["result_json"])["parse_fallback"] is False
 
 
 def test_parse_result_tags_placeholder_filtered():

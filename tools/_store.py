@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
 from abc import ABC, abstractmethod
@@ -330,20 +331,35 @@ class SQLiteVisionStore(VisionStore):
             db.commit()
 
     def search(self, query: str, limit: int = 20, offset: int = 0) -> list[dict]:
+        """字面子串搜索（非语义搜索）。多词 AND：按空白/逗号拆分关键词，
+        每个词都需在任一字段命中（词序无关）——「浴缸 手机」= 含浴缸且含手机。
+        排序按 read_at DESC（读取时间倒序）：hit_count 是缓存复用次数，与查询
+        相关度无关——用它排序会让被反复复用的老图永久霸榜（实测：858 条命中里
+        今天刚读的图因 hit_count 低被埋在 20 名之外）。"""
+        terms = [t for t in re.split(r"[\s,，、]+", query.strip()) if t]
+        if not terms:
+            return []
         with self._lock:
             db = self._ensure_conn()
             db.row_factory = sqlite3.Row
-            like = f"%{_like_escape(query)}%"
+            where_parts = []
+            params: list = []
+            for t in terms:
+                like = f"%{_like_escape(t)}%"
+                where_parts.append(
+                    "(peek LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'"
+                    " OR filename LIKE ? ESCAPE '\\' OR source_value LIKE ? ESCAPE '\\')"
+                )
+                params.extend([like] * 5)
             rows = db.execute(
-                """
+                f"""
                 SELECT result_id, sha256, filename, source_value, peek, text, tags, question, read_at, hit_count
                 FROM image_cache
-                WHERE peek LIKE ? ESCAPE '\\' OR text LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\'
-                  OR filename LIKE ? ESCAPE '\\' OR source_value LIKE ? ESCAPE '\\'
-                ORDER BY hit_count DESC, read_at DESC
+                WHERE {" AND ".join(where_parts)}
+                ORDER BY read_at DESC, rowid DESC
                 LIMIT ? OFFSET ?
                 """,
-                (like, like, like, like, like, limit, offset),
+                (*params, limit, offset),
             ).fetchall()
             db.row_factory = None
             return [dict(r) for r in rows]

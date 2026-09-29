@@ -102,16 +102,75 @@ def _compute_phash(path: str) -> str:
         return ""
 
 
-def _extract_json(text: str) -> dict | None:
-    """从模型输出中提取 JSON 对象：容忍 ```json 围栏和前后杂音。"""
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        return None
+def _try_loads(s: str) -> dict | None:
     try:
-        data = json.loads(m.group(0))
+        data = json.loads(s)
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _merge_json_objects(text: str) -> dict | None:
+    """raw_decode 循环解析多个连续 JSON 对象并合并——模型把结果拆成两段
+    （如 {peek,text} 一段、{tags} 一段）时，贪婪正则会把两段拼成非法 JSON。"""
+    decoder = json.JSONDecoder()
+    merged: dict = {}
+    found = False
+    pos = 0
+    while pos < len(text):
+        start = text.find("{", pos)
+        if start == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(text[start:])
+        except Exception:
+            pos = start + 1  # 这个「{」不是对象起点，跳过
+            continue
+        if isinstance(obj, dict):
+            merged.update(obj)
+            found = True
+        pos = start + end
+    return merged if found else None
+
+
+# 中文模型高发：全角标点导致整段 JSON 非法（实测 11 张纯色图 1 条因此失败）
+# 用 Unicode 转义书写，避免编辑器/编码层把全角引号吃掉
+_FULLWIDTH_MAP = str.maketrans({
+    "，": ",",      # fullwidth comma
+    "：": ":",      # fullwidth colon
+    "\u201c": '"',  # left double quotation mark
+    "\u201d": '"',  # right double quotation mark
+})
+
+
+def _extract_json(text: str) -> dict | None:
+    """从模型输出中提取 JSON 对象，三级容错：
+    1. 围栏剥离后整段解析（含贪婪大括号切片，兼容前后杂音）；
+    2. 多对象 raw_decode 合并（模型把结果拆成两段 JSON）；
+    3. 全角标点归一半角后重试（中文模型高发）。
+    """
+    stripped = re.sub(r"```(?:json)?", "", text).strip()
+    data = _try_loads(stripped)
+    if data is not None:
+        return data
+    m = re.search(r"\{.*\}", stripped, re.S)
+    if m:
+        data = _try_loads(m.group(0))
+        if data is not None:
+            return data
+    merged = _merge_json_objects(stripped)
+    if merged:
+        return merged
+    normalized = text.translate(_FULLWIDTH_MAP)
+    if normalized != text:
+        stripped2 = re.sub(r"```(?:json)?", "", normalized).strip()
+        data = _try_loads(stripped2)
+        if data is not None:
+            return data
+        merged = _merge_json_objects(stripped2)
+        if merged:
+            return merged
+    return None
 
 
 # 提示词中 JSON 骨架的示例值——弱模型可能照抄占位符原文落库，解析时识别并剔除
@@ -126,8 +185,10 @@ _PLACEHOLDER_VALUES = frozenset({
 
 
 def _parse_result(raw: str) -> dict:
-    """解析 VL 返回：优先按结构化 JSON（peek/text/tags）解析，
-    模型不遵守格式时回退到「首行作为预览」的旧行为，读图永不因解析失败而失败。
+    """解析 VL 返回：优先按结构化 JSON（peek/text/tags）解析；解析失败时先用正则
+    捞出 \"peek\" 字段当预览（避免把整段 JSON 原文塞进 agent 上下文），实在捞不到
+    才回退「首行作为预览」。读图永不因解析失败而失败。
+    返回附带 parse_fallback 标记（落库进 result_json，解析失败率才可统计）。
     兼容旧缓存：读取时 peek 优先，summary 兜底（老记录/老模型输出的字段名）。"""
     text = raw.strip()
     data = _extract_json(text)
@@ -147,15 +208,22 @@ def _parse_result(raw: str) -> dict:
                 "peek": (peek or body.split("\n")[0])[:200],
                 "text": body or peek,
                 "tags": tags,
+                "parse_fallback": False,
             }
         # 提取到了 JSON 但无实质内容（如只有 tags）：返回空字段，
         # 避免兜底路径把 JSON 原文第一行当预览落库
-        return {"peek": "", "text": "", "tags": tags}
+        return {"peek": "", "text": "", "tags": tags, "parse_fallback": False}
+    # 最终兜底：整段不是合法 JSON 时，至少把 "peek" 字段捞出来，
+    # 避免 200+ 字 JSON 噪声直接进 agent 上下文（实测旧行为 peek 就是原始 JSON）
+    m = re.search(r'"peek"\s*:\s*"((?:[^"\\]|\\.){1,200})"', text)
+    if m:
+        return {"peek": m.group(1)[:200], "text": text, "tags": [], "parse_fallback": True}
     peek = text.split("\n")[0] if text else ""
     return {
         "peek": peek[:200],
         "text": text,
         "tags": [],
+        "parse_fallback": True,
     }
 
 
@@ -378,6 +446,7 @@ async def read(
                     "peek": parsed["peek"],
                     "text": parsed["text"],
                     "tags": parsed["tags"],
+                    "parse_fallback": parsed.get("parse_fallback", False),
                     "raw": raw,
                 },
                 detail=used_detail,
@@ -468,13 +537,12 @@ async def read(
     if len(ordered_ids) == 1:
         # 单条结果（单图，或同内容多路径去重后）：目标明确，直接 full 查这条
         next_args = {"result_id": ordered_ids[0]}
-    elif cached_count > 0 and ordered_ids:
-        # 批量含命中（纯命中/混合）：result_ids 精确指向本次涉及的记录——
-        # recent=N 按时间倒序会撞上无关的最新记录，把命中集合漏掉
+    elif ordered_ids:
+        # 多条（命中/新读/混合统一走 result_ids）：精确指向本次涉及的记录——
+        # recent=N 按时间倒序会撞无关记录，且 >10 条时静默截断（纯新读同样如此）
         next_args = {"result_ids": ordered_ids[:10]}
     else:
-        # 纯新读批量：只给 recent（list 模式浏览），不夹带 result_id——
-        # 否则 vision_query 里 result_id 优先级最高，会直接 full 第一张而跳过其余
+        # 兜底（理论不可达：全失败已在上面 return）
         next_args = {"recent": min(len(image_paths), 10)}
 
     reply = {
@@ -495,8 +563,9 @@ async def read(
     if missing:
         # 部分传入路径未找到/不支持：必须回显，静默丢图会让 agent 基于不完整集合下结论
         reply["missing_paths"] = missing
-    if cached_count > 0 and len(ordered_ids) > 10:
-        # result_ids cap 10 的截断必须告知，否则超出的记录通过 next_call 永远够不着
+    if len(ordered_ids) > 10:
+        # result_ids cap 10 的截断必须告知（命中/新读一视同仁），
+        # 否则超出的记录通过 next_call 永远够不着
         reply["unlisted_count"] = len(ordered_ids) - 10
         reply["proposal"] += f"（本次共 {len(ordered_ids)} 条记录，next_call 列出前 10 个 result_id，其余可按 path/query 查询）"
     if result_id_hint:

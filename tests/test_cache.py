@@ -14,6 +14,60 @@ def _make_db():
     return create_store(db_path), db_path
 
 
+def test_search_multi_term_and():
+    """多词 AND：空格/逗号分隔的每个词都需在任一字段命中（词序无关）；
+    单词行为不变；空白查询返回空。"""
+    db, db_path = _make_db()
+    try:
+        db.insert(
+            sha256="s1", filename="a.png", phash="", model_id="m", question="",
+            result_id="res_both", source_value="/a", peek="浴室照片",
+            text="浴缸里放着手机", tags=[], result_json={},
+        )
+        db.insert(
+            sha256="s2", filename="b.png", phash="", model_id="m", question="",
+            result_id="res_only_tub", source_value="/b", peek="浴室",
+            text="浴缸特写", tags=[], result_json={},
+        )
+        # 单词：两条都命中
+        assert {r["result_id"] for r in db.search("浴缸")} == {"res_both", "res_only_tub"}
+        # 多词 AND：「浴缸 手机」= 含浴缸且含手机（实测旧实现单串 LIKE 返回 0 条）
+        assert [r["result_id"] for r in db.search("浴缸 手机")] == ["res_both"]
+        assert [r["result_id"] for r in db.search("手机 浴缸")] == ["res_both"]  # 词序无关
+        # 中文逗号/顿号分隔
+        assert [r["result_id"] for r in db.search("浴缸，手机")] == ["res_both"]
+        assert [r["result_id"] for r in db.search("浴缸、手机")] == ["res_both"]
+        assert db.search("   ") == []
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
+def test_search_orders_by_read_at_not_hit_count():
+    """排序按 read_at DESC：hit_count 是缓存复用次数，与查询相关度无关——
+    被反复复用的老图不应霸榜（实测：今天刚读的图因 hit_count 低被埋在 20 名之外）。"""
+    db, db_path = _make_db()
+    try:
+        db.insert(
+            sha256="s_old", filename="old.png", phash="", model_id="m", question="",
+            result_id="res_old", source_value="/old", peek="水印", text="老图水印",
+            tags=[], result_json={},
+        )
+        for _ in range(6):  # 老图刷高 hit_count
+            db.find_cached("s_old", "m", "")
+        db.insert(
+            sha256="s_new", filename="new.png", phash="", model_id="m", question="",
+            result_id="res_new", source_value="/new", peek="水印", text="新图水印",
+            tags=[], result_json={},
+        )
+        results = db.search("水印")
+        assert results[0]["result_id"] == "res_new"  # 新记录在前（hit_count=0）
+        assert results[1]["result_id"] == "res_old"  # hit_count=6 反而在后
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
 def test_find_cached_by_phash_deterministic_on_tie():
     """同 phash 多记录（等距候选）：命中是确定的——候选按 read_at DESC 遍历、
     等距严格小于不替换 → 最新记录优先，两次调用返回同一条。"""

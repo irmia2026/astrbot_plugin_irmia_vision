@@ -84,7 +84,7 @@ async def query(
         return proposal_reply(
             False,
             "未找到匹配结果。请尝试扩大搜索范围、按路径查询或查看最近结果。",
-            options=["换关键词搜索", "按路径查询", "查看最近 10 条"],
+            options=["换关键词搜索（空格分隔多词为 AND）", "用 path= 按路径查", "用 recent=10 查看最近 10 条"],
         )
 
     # 根据当前查询类型，构造保留条件的 next_call

@@ -114,11 +114,22 @@ vision_read 只负责把图读完存进数据库。
 - **list 模式**：列表查询（`query`、`filename`、`path`、`recent`），每行只含 `result_id`、`filename`、`peek`（一句话预览）、`question`。适合翻页、筛选、分类。
 - **full 模式**：`result_id` 精确查询，返回完整信息，包括 `path`、`text`、`tags`、`read_at`、`hit_count`。
 
-#### 自然语言搜索（list）
+#### 关键词搜索（list）
+
+字面子串匹配（非语义搜索）：空格或逗号分隔多个关键词为 AND（每个词都需命中，词序无关）；按读取时间倒序。
 
 ```json
 {
   "query": "发票",
+  "limit": 20
+}
+```
+
+多词组合（如「浴缸 手机」= 含浴缸且含手机）：
+
+```json
+{
+  "query": "发票 2026",
   "limit": 20
 }
 ```
