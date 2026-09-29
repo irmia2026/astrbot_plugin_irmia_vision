@@ -464,6 +464,77 @@ def test_empty_structured_content_not_stored(tmp_path):
     asyncio.run(_run())
 
 
+def test_batch_all_cached_next_call_uses_result_ids(tmp_path):
+    """批量全命中：next_call 用 result_ids 精确指向命中集合（顺序与传入一致），
+    而非 recent=N 撞时间倒序的无关记录。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    paths = []
+    ids = []
+    for i, name in enumerate(("a.png", "b.png")):
+        p = tmp_path / name
+        _make_test_image(str(p), size=(800 + i, 600))
+        rid = f"res_hit_{i}"
+        db.insert(
+            sha256=db.sha256_of_file(str(p)), filename=name, phash="",
+            model_id="fake-vl", question="", result_id=rid, source_value=str(p),
+            peek=name, text=name, tags=[], result_json={},
+        )
+        paths.append(str(p))
+        ids.append(rid)
+
+    async def _run():
+        return await vision_read.read(db, paths=paths)
+
+    result = asyncio.run(_run())
+    assert result["cached"] == 2
+    assert result["read"] == 0
+    assert result["next_call"]["arguments"] == {"result_ids": ids}
+    assert "命中结果" in result["result_id_hint"]  # 纯命中三态文案
+    db.close()
+
+
+def test_batch_mixed_next_call_result_ids_cover_all(tmp_path):
+    """混合批量（1 命中 + 1 新读）：result_ids 覆盖全部传入图
+    （命中给缓存 id、新读给新 id），顺序与传入一致。"""
+    from tools import vision_read
+
+    db, db_path = _setup_fake_vl(tmp_path)
+    cached_img = tmp_path / "a_cached.png"
+    _make_test_image(str(cached_img), size=(800, 600))
+    db.insert(
+        sha256=db.sha256_of_file(str(cached_img)), filename="a_cached.png", phash="",
+        model_id="fake-vl", question="", result_id="res_hit", source_value=str(cached_img),
+        peek="命中图", text="命中", tags=[], result_json={},
+    )
+    new_img = tmp_path / "b_new.png"
+    _make_test_image(str(new_img), size=(810, 610))
+
+    original_vl = vision_read.vl_read_image
+
+    async def fake_vl(path, prompt, *, max_tokens=4096, client=None, vl_config=None, json_mode=False, image_url=None):
+        return '{"peek": "新图", "text": "新", "tags": []}'
+
+    async def _run():
+        vision_read.vl_read_image = fake_vl
+        try:
+            return await vision_read.read(db, paths=[str(cached_img), str(new_img)])
+        finally:
+            vision_read.vl_read_image = original_vl
+
+    result = asyncio.run(_run())
+    assert result["cached"] == 1
+    assert result["read"] == 1
+    args = result["next_call"]["arguments"]
+    assert "result_ids" in args
+    assert args["result_ids"][0] == "res_hit"  # 命中给缓存 id
+    new_id = args["result_ids"][1]
+    assert new_id != "res_hit" and db.get_by_result_id(new_id) is not None  # 新读给新 id 且已落库
+    assert result["result_id_hint"].startswith("结果")  # 混合三态文案（非「新结果」）
+    db.close()
+
+
 def test_cached_hit_next_call_points_to_cached_record(tmp_path):
     """缓存命中的 next_call 必须指向命中的记录本身（result_id 精确查）——
     旧逻辑退化成 recent=1，指向库中最新记录（可能是完全无关的图），污染上下文。"""

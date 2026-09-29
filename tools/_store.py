@@ -64,6 +64,11 @@ class VisionStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_by_result_ids(self, result_ids: list[str]) -> list[dict]:
+        """按 result_id 列表批量精确查询。返回顺序与传入 ids 一致，不存在的跳过。"""
+        raise NotImplementedError
+
+    @abstractmethod
     def get_by_filename(self, filename: str, limit: int = 20, offset: int = 0) -> list[dict]:
         raise NotImplementedError
 
@@ -388,6 +393,23 @@ class SQLiteVisionStore(VisionStore):
             ).fetchone()
             db.row_factory = None
             return dict(row) if row else None
+
+    def get_by_result_ids(self, result_ids: list[str]) -> list[dict]:
+        """按 id 列表批量取。只读不计数（与 get_by_result_id 一致：
+        「查看」不刷 hit_count）。返回顺序与传入 ids 一致。"""
+        if not result_ids:
+            return []
+        with self._lock:
+            db = self._ensure_conn()
+            db.row_factory = sqlite3.Row
+            placeholders = ",".join("?" for _ in result_ids)
+            rows = db.execute(
+                f"SELECT * FROM image_cache WHERE result_id IN ({placeholders})",
+                tuple(result_ids),
+            ).fetchall()
+            db.row_factory = None
+            by_id = {r["result_id"]: dict(r) for r in rows}
+            return [by_id[rid] for rid in result_ids if rid in by_id]
 
     def get_by_filename(self, filename: str, limit: int = 20, offset: int = 0) -> list[dict]:
         with self._lock:

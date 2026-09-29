@@ -14,6 +14,7 @@ async def query(
     db: VisionStore,
     query: str = "",
     result_id: str = "",
+    result_ids: list | None = None,
     filename: str = "",
     path: str = "",
     recent: int = 0,
@@ -27,6 +28,14 @@ async def query(
         row = await run_sync(db.get_by_result_id, result_id)
         results = [row] if row else []
         mode = "full"
+    elif result_ids:
+        # id 列表批量精确取（如 vision_read 批量命中后的 next_call 落点）：
+        # 返回顺序与传入一致；list 模式（多条用 peek 预览保护上下文，要全文再单条 full）
+        if not isinstance(result_ids, list):
+            result_ids = [result_ids]
+        ids = [str(r).strip() for r in result_ids if str(r).strip()][:100]
+        results = await run_sync(db.get_by_result_ids, ids)
+        mode = "list"
     elif filename:
         results = await run_sync(db.get_by_filename, filename, limit=max_limit, offset=max_offset)
         mode = "list"
@@ -79,8 +88,11 @@ async def query(
         )
 
     # 根据当前查询类型，构造保留条件的 next_call
+    # （result_ids 是一次性精确集合，翻页无意义，不构造）
     next_args: dict = {"offset": max_offset + max_limit, "limit": max_limit}
-    if query:
+    if result_ids:
+        next_args = {}
+    elif query:
         next_args["query"] = query
     elif filename:
         next_args["filename"] = filename

@@ -98,6 +98,11 @@ def register_tools(db_path: str) -> list[FunctionTool]:
                         "type": "string",
                         "description": "通过 result_id 精确查询单条结果，返回 full 模式：包含 path、完整描述 text、tags 等。",
                     },
+                    "result_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "按 result_id 列表批量精确查询（如 vision_read 批量命中后返回的 id 集合），返回顺序与传入一致。返回 list 模式（轻量预览），要全文再用 result_id 单条查。最多 100 个。",
+                    },
                     "filename": {
                         "type": "string",
                         "description": "按文件名查询。返回 list 模式：只包含 result_id、filename、peek、question（轻量预览）。",

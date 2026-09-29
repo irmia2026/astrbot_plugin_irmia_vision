@@ -136,6 +136,7 @@ vl_provider_ids: my-gpt4o, my-qwen-vl, my-gemini
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `result_id` | `string` | 否 | 精确查询单条结果（full 模式：包含 path、完整描述 text、tags 等）。 |
+| `result_ids` | `list[string]` | 否 | 按 id 列表批量精确查询（如 vision_read 批量命中返回的 id 集合），返回顺序与传入一致（list 模式，最多 100 个）。 |
 | `query` | `string` | 否 | 自然语言搜索（list 模式：返回 result_id/filename/peek/question）。 |
 | `filename` | `string` | 否 | 按文件名查询（list 模式）。 |
 | `path` | `string` | 否 | 按路径前缀/包含字符串查询（list 模式）。 |

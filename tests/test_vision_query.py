@@ -129,3 +129,38 @@ def test_vision_query_pagination(tmp_path):
     assert result["total"] == 2
     assert result["next_call"]["arguments"]["offset"] == 2
     assert result["next_call"]["tool"] == "vision_query"
+
+
+def test_query_by_result_ids(tmp_path):
+    """result_ids 批量精确查询：返回顺序与传入一致（不是库序）、不存在的 id 跳过、
+    list 模式（轻量预览）、只读不刷 hit_count、next_call 不构造分页。"""
+
+    async def _run():
+        fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmp_path)
+        os.close(fd)
+        db = create_store(db_path)
+        try:
+            for rid in ("res_a", "res_b", "res_c"):
+                db.insert(
+                    sha256=f"sha_{rid}", filename=f"{rid}.png", phash="",
+                    model_id="m", question="", result_id=rid,
+                    source_value=f"/tmp/{rid}.png", peek=f"预览{rid}", text="t",
+                    tags=[], result_json={},
+                )
+            # 乱序传入 + 含一个不存在的 id
+            return await vision_query.query(db, result_ids=["res_c", "res_a", "res_void"]), db
+        finally:
+            pass
+
+    result, db = asyncio.run(_run())
+    try:
+        assert result["ok"] is True
+        assert result["mode"] == "list"
+        assert [r["result_id"] for r in result["results"]] == ["res_c", "res_a"]  # 传入顺序
+        assert set(result["results"][0].keys()) == {"result_id", "filename", "peek", "question"}
+        # 只读不计数
+        assert db.get_by_result_id("res_c")["hit_count"] == 0
+        # 一次性精确集合：不构造翻页 next_call
+        assert result["next_call"]["arguments"] == {}
+    finally:
+        db.close()

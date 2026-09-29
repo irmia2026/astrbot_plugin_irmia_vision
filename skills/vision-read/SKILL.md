@@ -166,6 +166,16 @@ vision_read 只负责把图读完存进数据库。
 }
 ```
 
+#### 按 id 列表批量查询（list）
+
+`vision_read` 批量命中缓存后，`next_call` 会给出本次涉及的 `result_ids` 集合（命中给缓存 id、新读给新 id，顺序与传入一致），照走即可：
+
+```json
+{
+  "result_ids": ["res_aaa", "res_bbb"]
+}
+```
+
 ### 4. 批量导出
 
 当你需要批量处理大量结果（例如交给 Python 脚本分类、移动、统计）时，调用 `vision_export`：

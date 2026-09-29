@@ -213,6 +213,9 @@ async def read(
     first_result_id = ""
     last_result_id = ""
     semaphore = asyncio.Semaphore(concurrency)
+    # 每张图的实际结果记录（命中给缓存 id、新读给新 id）：
+    # 批量含命中时 next_call 用 result_ids 精确指向这批记录，而非 recent 撞运气
+    result_ids_by_path: dict = {}
 
     import httpx
     limits = httpx.Limits(max_connections=concurrency * 2, max_keepalive_connections=concurrency)
@@ -245,6 +248,7 @@ async def read(
                 # {"recent": 1} 指向库中最新记录（可能是完全无关的图），污染 agent 上下文
                 rid = cached.get("result_id", "")
                 if rid:
+                    result_ids_by_path[path] = rid
                     if not first_result_id:
                         first_result_id = rid
                     last_result_id = rid
@@ -264,6 +268,7 @@ async def read(
                     # 配套的 phash_note 已在响应中提示差异，语义自洽
                     rid = cached.get("result_id", "")
                     if rid:
+                        result_ids_by_path[path] = rid
                         if not first_result_id:
                             first_result_id = rid
                         last_result_id = rid
@@ -364,6 +369,7 @@ async def read(
                 detail=used_detail,
             )
             read_count += 1
+            result_ids_by_path[path] = result_id
             if not first_result_id:
                 first_result_id = result_id
             last_result_id = result_id
@@ -398,10 +404,19 @@ async def read(
     else:
         status = "success"
 
+    # 与传入顺序一致的结果 id 序列（命中给缓存 id、新读给新 id；失败的不在内）
+    ordered_ids = [result_ids_by_path[p] for p in image_paths if p in result_ids_by_path]
+
     result_id_hint = ""
     if first_result_id and last_result_id:
-        # 纯命中场景不是「新结果」，文案区分避免误导
-        label = "新结果" if read_count > 0 else "命中结果"
+        # 三态文案：纯新读=新结果 / 纯命中=命中结果 / 混合=结果（混合批量下
+        # 范围起点可能是命中记录，写「新结果」自相矛盾）
+        if read_count > 0 and cached_count > 0:
+            label = "结果"
+        elif read_count > 0:
+            label = "新结果"
+        else:
+            label = "命中结果"
         if first_result_id == last_result_id:
             result_id_hint = f"{label} result_id: {first_result_id}"
         else:
@@ -409,10 +424,14 @@ async def read(
 
     next_args: dict = {}
     if first_result_id and last_result_id and first_result_id == last_result_id:
-        # 单图：目标明确，直接 full 查这条
+        # 单图（命中或新读）：目标明确，直接 full 查这条
         next_args = {"result_id": first_result_id}
+    elif cached_count > 0 and ordered_ids:
+        # 批量含命中（纯命中/混合）：result_ids 精确指向本次涉及的记录——
+        # recent=N 按时间倒序会撞上无关的最新记录，把命中集合漏掉
+        next_args = {"result_ids": ordered_ids[:10]}
     else:
-        # 批量：只给 recent（list 模式浏览全部预览），不夹带 result_id——
+        # 纯新读批量：只给 recent（list 模式浏览），不夹带 result_id——
         # 否则 vision_query 里 result_id 优先级最高，会直接 full 第一张而跳过其余
         next_args = {"recent": min(len(image_paths), 10)}
 

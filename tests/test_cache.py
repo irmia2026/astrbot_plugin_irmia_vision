@@ -14,6 +14,29 @@ def _make_db():
     return create_store(db_path), db_path
 
 
+def test_find_cached_by_phash_deterministic_on_tie():
+    """同 phash 多记录（等距候选）：命中是确定的——候选按 read_at DESC 遍历、
+    等距严格小于不替换 → 最新记录优先，两次调用返回同一条。"""
+    db, db_path = _make_db()
+    try:
+        # 两条 phash 完全相同的记录（popcount 在 4-60 正常范围）
+        for rid in ("res_old", "res_new"):
+            db.insert(
+                sha256=f"sha_{rid}", filename=f"{rid}.png", phash="9e9a2b13bdbd3090",
+                model_id="m", question="", result_id=rid, source_value=f"/tmp/{rid}.png",
+                peek=rid, text=rid, tags=[], result_json={},
+            )
+        # 查询 phash 与两者距离相同（末位 0→1，距离 1）
+        first = db.find_cached_by_phash("9e9a2b13bdbd3091", "m", "")
+        second = db.find_cached_by_phash("9e9a2b13bdbd3091", "m", "")
+        assert first is not None and second is not None
+        assert first["result_id"] == second["result_id"]  # 确定性
+        assert first["result_id"] == "res_new"  # 等距取最新
+    finally:
+        db.close()
+        os.unlink(db_path)
+
+
 def test_get_by_result_id_does_not_count_hit():
     """get_by_result_id 只读不计数：hit_count 专属于缓存命中，
     「查看」不刷高命中统计（search 按 hit_count DESC 排序的可信度）。"""
